@@ -1,0 +1,11 @@
+apiVersion: workload.nephio.org/v1alpha1
+kind: NFDeployment
+metadata:
+  name: gnb-example
+  namespace: example
+spec:
+  provider: gnb.srsran.io
+  parametersRefs:
+  - apiVersion: workload.nephio.org/v1alpha1
+    kind: NFConfig
+    name: gnb-nf-config

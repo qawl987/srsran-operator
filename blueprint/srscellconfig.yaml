@@ -1,0 +1,20 @@
+apiVersion: workload.nephio.org/v1alpha1
+kind: SrsRANCellConfig
+metadata:
+  name: gnb-cell-config
+  namespace: example
+spec:
+  dlArfcn: 368500
+  band: 3
+  channelBandwidthMHz: 20
+  commonScs: 15
+  pci: 1
+  pdcch:
+    ss0Index: 0
+    coreset0Index: 12
+    ss2Type: common
+    dciFormat01and11: false
+  prach:
+    prachConfigIndex: 1
+  pdschMcsTable: qam64
+  puschMcsTable: qam64

@@ -1,0 +1,15 @@
+apiVersion: req.nephio.org/v1alpha1
+kind: Interface
+metadata:
+  name: e1
+  annotations:
+    # E1 carries the E1AP control-plane between CU-CP and CU-UP.
+    nephio.org/network-name: e1
+    config.kubernetes.io/local-config: "true"
+    specializer.nephio.org/owner: workload.nephio.org/v1alpha1.NFDeployment.gnb-example
+    specializer.nephio.org/namespace: example
+spec:
+  networkInstance:
+    name: vpc-internal
+  cniType: macvlan
+  attachmentType: vlan

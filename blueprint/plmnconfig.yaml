@@ -1,0 +1,11 @@
+apiVersion: workload.nephio.org/v1alpha1
+kind: PLMNConfig
+metadata:
+  name: gnb-plmn
+  namespace: example
+spec:
+  plmn: "20893"
+  tac: 1
+  slices:
+  - sst: 1
+    sd: "010203"

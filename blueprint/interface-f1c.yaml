@@ -1,0 +1,15 @@
+apiVersion: req.nephio.org/v1alpha1
+kind: Interface
+metadata:
+  name: f1c
+  annotations:
+    # F1C carries the F1-AP control-plane between CU-CP and DU.
+    nephio.org/network-name: f1c
+    config.kubernetes.io/local-config: "true"
+    specializer.nephio.org/owner: workload.nephio.org/v1alpha1.NFDeployment.gnb-example
+    specializer.nephio.org/namespace: example
+spec:
+  networkInstance:
+    name: vpc-internal
+  cniType: macvlan
+  attachmentType: vlan
