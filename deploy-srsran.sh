@@ -500,28 +500,35 @@ if [[ -z "${SRSRAN_REV}" ]]; then
     warn "Then manually: porchctl rpkg propose <rev> -n default"
     warn "               porchctl rpkg approve <rev> -n default"
 else
-    info "Found PackageRevision: ${SRSRAN_REV}"
+    # Approve ALL non-Published revisions for this package (Porch may generate
+    # packagevariant-1, packagevariant-2, etc. across multiple reconcile cycles)
+    ALL_REVS=$(porchctl rpkg get -n default 2>/dev/null \
+        | grep "${CLUSTER_NAME}\.${DOWNSTREAM_PKG}\." \
+        | grep -v "Published" \
+        | awk '{print $1}')
 
-    # Check if it needs proposing (Draft state)
-    LIFECYCLE=$(kubectl get packagerevision -n default "${SRSRAN_REV}" \
-        -o jsonpath='{.spec.lifecycle}' 2>/dev/null || echo "Unknown")
-    info "Current lifecycle: ${LIFECYCLE}"
-
-    if [[ "${LIFECYCLE}" == "Draft" ]]; then
-        porchctl rpkg propose "${SRSRAN_REV}" -n default
-        info "Proposed ${SRSRAN_REV}"
-        # Wait for Proposed state
-        kubectl wait --for=jsonpath='{.spec.lifecycle}'=Proposed \
-            packagerevision "${SRSRAN_REV}" -n default \
-            --timeout=60s 2>/dev/null || true
-    fi
-
-    if [[ "${LIFECYCLE}" != "Published" ]]; then
-        porchctl rpkg approve "${SRSRAN_REV}" -n default
-        ok "Approved: ${SRSRAN_REV}"
-        wait_for_packagerevision_published "${SRSRAN_REV}" 120
+    if [[ -z "${ALL_REVS}" ]]; then
+        ok "All PackageRevisions already Published"
     else
-        ok "PackageRevision already Published: ${SRSRAN_REV}"
+        for rev in ${ALL_REVS}; do
+            LIFECYCLE=$(kubectl get packagerevision -n default "${rev}" \
+                -o jsonpath='{.spec.lifecycle}' 2>/dev/null || echo "Unknown")
+            info "PackageRevision ${rev} lifecycle: ${LIFECYCLE}"
+
+            if [[ "${LIFECYCLE}" == "Draft" ]]; then
+                porchctl rpkg propose "${rev}" -n default
+                info "Proposed ${rev}"
+                sleep 5
+            fi
+
+            if [[ "${LIFECYCLE}" != "Published" ]]; then
+                porchctl rpkg approve "${rev}" -n default
+                ok "Approved: ${rev}"
+                wait_for_packagerevision_published "${rev}" 120
+            else
+                ok "Already Published: ${rev}"
+            fi
+        done
     fi
 fi
 
@@ -531,10 +538,31 @@ echo "=== Step 10: Wait for srsRAN gNB pods ==="
 info "Waiting for ConfigSync to apply the package (up to 3 min)..."
 sleep 30
 
+# Label srsran-gnb namespace to allow privileged pods.
+# srsRAN processes (CU-CP/CU-UP/DU) require privileged securityContext;
+# Kubernetes 1.25+ enforces PodSecurity by default.
+# Note: ConfigSync manages this namespace but does not set PodSecurity labels,
+# so we label it here after it is created.
+if ${WKCTL} get namespace "${DOWNSTREAM_PKG}" &>/dev/null; then
+    ${WKCTL} label namespace "${DOWNSTREAM_PKG}" \
+        pod-security.kubernetes.io/enforce=privileged \
+        pod-security.kubernetes.io/enforce-version=latest \
+        pod-security.kubernetes.io/warn=privileged \
+        pod-security.kubernetes.io/warn-version=latest \
+        pod-security.kubernetes.io/audit=privileged \
+        pod-security.kubernetes.io/audit-version=latest \
+        --overwrite 2>/dev/null \
+        && ok "Namespace ${DOWNSTREAM_PKG} labeled with privileged PodSecurity" \
+        || warn "Could not label namespace ${DOWNSTREAM_PKG} (may not exist yet)"
+else
+    warn "Namespace ${DOWNSTREAM_PKG} not yet created – will need manual labeling:"
+    warn "  kubectl --kubeconfig=${KUBECONFIG_FILE} label namespace ${DOWNSTREAM_PKG} pod-security.kubernetes.io/enforce=privileged --overwrite"
+fi
+
 # The operator creates pods in a namespace matching the NFDeployment name
-# Try common namespace patterns
-SRSRAN_NS="srsran"
-for ns_candidate in "srsran" "srsran-${CLUSTER_NAME}" "free5gc-srsran"; do
+# Try common namespace patterns (srsran-gnb is the default from the blueprint)
+SRSRAN_NS="${DOWNSTREAM_PKG}"
+for ns_candidate in "${DOWNSTREAM_PKG}" "srsran" "srsran-${CLUSTER_NAME}" "free5gc-srsran"; do
     if ${WKCTL} get namespace "${ns_candidate}" &>/dev/null; then
         SRSRAN_NS="${ns_candidate}"
         info "Using namespace: ${SRSRAN_NS}"
