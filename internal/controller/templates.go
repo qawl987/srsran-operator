@@ -163,13 +163,18 @@ cu_cp:
     bind_addr: {{ .F1CBindAddr }}
 
 log:
-  filename: /var/log/srsran/cu_cp.log
+  filename: /tmp/cu_cp.log
   all_level: info
 
 pcap:
-  n2_enable: false
+  ngap_enable: false
   e1ap_enable: false
   f1ap_enable: false
+
+expert_execution:
+  threads:
+    main_pool:
+      backoff_period: 1000
 `
 
 var cucpConfigTemplate = template.Must(template.New("cu-cp-config").Parse(cucpConfigTemplateSource))
@@ -214,13 +219,18 @@ cu_up:
     - bind_addr: {{ .F1UBindAddr }}
 
 log:
-  filename: /var/log/srsran/cu_up.log
+  filename: /tmp/cu_up.log
   all_level: info
 
 pcap:
   e1ap_enable: false
   f1u_enable: false
   n3_enable: false
+
+expert_execution:
+  threads:
+    main_pool:
+      backoff_period: 1000
 `
 
 var cuupConfigTemplate = template.Must(template.New("cu-up-config").Parse(cuupConfigTemplateSource))
@@ -323,13 +333,18 @@ cell_cfg:
     mcs_table: {{ .PUSCHMcsTable }}
 
 log:
-  filename: /var/log/srsran/du.log
+  filename: /tmp/du.log
   all_level: info
 
 pcap:
   mac_enable: false
   f1ap_enable: false
   f1u_enable: false
+
+expert_execution:
+  threads:
+    main_pool:
+      backoff_period: 1000
 `
 
 var duConfigTemplate = template.Must(template.New("du-config").Parse(duConfigTemplateSource))
