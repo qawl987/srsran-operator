@@ -243,27 +243,23 @@ if ! command -v docker &>/dev/null; then
     warn "Ensure ${IMG} is already accessible in ${WORKER_NODE}."
 else
     # Compile Go binary first (Dockerfile uses pre-built binary via COPY manager .)
+    # CGO_ENABLED=0 ensures a fully static binary for the distroless/static image
     info "Compiling Go binary..."
     cd "${SCRIPT_DIR}"
-    go build -o manager ./cmd/main.go \
+    CGO_ENABLED=0 GOOS=linux go build -o manager ./cmd/main.go \
         || die "go build failed"
     ok "manager binary compiled"
 
     info "Building ${IMG} from ${SCRIPT_DIR}..."
-    docker build -t "${IMG}" "${SCRIPT_DIR}" \
+    sudo docker build -t "${IMG}" "${SCRIPT_DIR}" \
         || die "docker build failed"
     ok "Image built: ${IMG}"
 
     info "Loading image into kind cluster node ${WORKER_NODE}..."
-    kind load docker-image "${IMG}" \
-        --name "${CLUSTER_NAME}" 2>/dev/null \
-        || {
-            warn "kind load failed – trying docker save | docker exec..."
-            # Must use -n k8s.io so kubelet can find the image in containerd
-            docker save "${IMG}" \
-                | sudo docker exec -i "${WORKER_NODE}" ctr -n k8s.io images import - \
-                || warn "Image load may have failed; continuing anyway"
-        }
+    # Must use -n k8s.io so kubelet can find the image in containerd
+    sudo docker save "${IMG}" \
+        | sudo docker exec -i "${WORKER_NODE}" ctr -n k8s.io images import - \
+        || warn "Image load may have failed; continuing anyway"
     ok "Image loaded into ${WORKER_NODE}"
 fi
 

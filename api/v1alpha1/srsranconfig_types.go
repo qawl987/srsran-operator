@@ -58,27 +58,27 @@ type SliceIntent struct {
 // container images, ZMQ RF simulation parameters, UE count and slice intent.
 type SrsRANConfigSpec struct {
 	// CUCPImage is the container image for the srsRAN CU-CP process.
-	// +kubebuilder:default="docker.io/softwareradiosystems/srsran-project:latest"
+	// +kubebuilder:default="docker.io/qawl987/srsran-split:latest"
 	CUCPImage string `json:"cucpImage"`
 
 	// CUUPImage is the container image for the srsRAN CU-UP process.
-	// +kubebuilder:default="docker.io/softwareradiosystems/srsran-project:latest"
+	// +kubebuilder:default="docker.io/qawl987/srsran-split:latest"
 	CUUPImage string `json:"cuupImage"`
 
 	// DUImage is the container image for the srsRAN DU process.
-	// +kubebuilder:default="docker.io/softwareradiosystems/srsran-project:latest"
+	// +kubebuilder:default="docker.io/qawl987/srsran-split:latest"
 	DUImage string `json:"duImage"`
 
 	// UEImage is the container image for the srsUE simulator.
 	// Only used when ZMQMode is true.
 	// +optional
-	// +kubebuilder:default="docker.io/softwareradiosystems/srsue:latest"
+	// +kubebuilder:default="docker.io/qawl987/srsran-split:latest"
 	UEImage string `json:"ueImage,omitempty"`
 
 	// RadioBreakerImage is the ZMQ proxy image used for multi-UE topology.
 	// Only used when ZMQMode is true and UECount > 1.
 	// +optional
-	// +kubebuilder:default="docker.io/softwareradiosystems/radio-breaker:latest"
+	// +kubebuilder:default="docker.io/qawl987/srsran-split:latest"
 	RadioBreakerImage string `json:"radioBreakerImage,omitempty"`
 
 	// ZMQMode enables ZMQ RF simulation (ru_sdr with device_driver=zmq).

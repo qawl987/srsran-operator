@@ -99,9 +99,9 @@ func makeTestConfigInfo(t *testing.T) *ConfigInfo {
 		APIVersion: "workload.nephio.org/v1alpha1",
 		Kind:       "SrsRANConfig",
 		Spec: srsranov1alpha1.SrsRANConfigSpec{
-			CUCPImage: "docker.io/softwareradiosystems/srsran-project:latest",
-			CUUPImage: "docker.io/softwareradiosystems/srsran-project:latest",
-			DUImage:   "docker.io/softwareradiosystems/srsran-project:latest",
+			CUCPImage: "docker.io/qawl987/srsran-split:latest",
+			CUUPImage: "docker.io/qawl987/srsran-split:latest",
+			DUImage:   "docker.io/qawl987/srsran-split:latest",
 			ZMQMode:   true,
 			SRate:     "23.04",
 			TxGain:    75,
