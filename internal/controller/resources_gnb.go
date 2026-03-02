@@ -188,13 +188,6 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 		return nil
 	}
 
-	// ── QoS ConfigMap (mounted into DU) ──────────────────────────────────────
-	qosCfg, err := renderQoSConfigMap(srsranCfg.Spec.SliceIntent)
-	if err != nil {
-		log.Error(err, "Failed to render QoS configmap")
-		return nil
-	}
-
 	return []*corev1.ConfigMap{
 		{
 			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
@@ -202,7 +195,7 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 				Name:      nfDeploy.Name + "-cucp-config",
 				Namespace: nfDeploy.Namespace,
 			},
-			Data: map[string]string{"cu_cp.yml": cucpCfg},
+			Data: map[string]string{"gnb-config.yml": cucpCfg},
 		},
 		{
 			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
@@ -210,7 +203,7 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 				Name:      nfDeploy.Name + "-cuup-config",
 				Namespace: nfDeploy.Namespace,
 			},
-			Data: map[string]string{"cu_up.yml": cuupCfg},
+			Data: map[string]string{"gnb-config.yml": cuupCfg},
 		},
 		{
 			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
@@ -218,10 +211,7 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 				Name:      nfDeploy.Name + "-du-config",
 				Namespace: nfDeploy.Namespace,
 			},
-			Data: map[string]string{
-				"du.yml":  duCfg,
-				"qos.yml": qosCfg,
-			},
+			Data: map[string]string{"gnb-config.yml": duCfg},
 		},
 	}
 }
@@ -259,20 +249,20 @@ func (g GnbResources) GetDeployment(log logr.Logger, nfDeploy *workloadv1alpha1.
 
 	cucpImg := srsranCfg.Spec.CUCPImage
 	if cucpImg == "" {
-		cucpImg = "docker.io/softwareradiosystems/srsran-project:latest"
+		cucpImg = "docker.io/qawl987/srsran-split:latest"
 	}
 	cuupImg := srsranCfg.Spec.CUUPImage
 	if cuupImg == "" {
-		cuupImg = "docker.io/softwareradiosystems/srsran-project:latest"
+		cuupImg = "docker.io/qawl987/srsran-split:latest"
 	}
 	duImg := srsranCfg.Spec.DUImage
 	if duImg == "" {
-		duImg = "docker.io/softwareradiosystems/srsran-project:latest"
+		duImg = "docker.io/qawl987/srsran-split:latest"
 	}
 
 	deployments := []*appsv1.Deployment{
-		gnbDeployment(nfDeploy, "cucp", cucpImg, nfDeploy.Name+"-cucp-config", "cu_cp.yml", podAnnotations),
-		gnbDeployment(nfDeploy, "cuup", cuupImg, nfDeploy.Name+"-cuup-config", "cu_up.yml", podAnnotations),
+		gnbDeployment(nfDeploy, "cucp", cucpImg, nfDeploy.Name+"-cucp-config", podAnnotations),
+		gnbDeployment(nfDeploy, "cuup", cuupImg, nfDeploy.Name+"-cuup-config", podAnnotations),
 		duDeployment(nfDeploy, duImg, nfDeploy.Name+"-du-config", podAnnotations),
 	}
 
@@ -280,7 +270,7 @@ func (g GnbResources) GetDeployment(log logr.Logger, nfDeploy *workloadv1alpha1.
 	if srsranCfg.Spec.UECount > 1 {
 		rbImg := srsranCfg.Spec.RadioBreakerImage
 		if rbImg == "" {
-			rbImg = "docker.io/softwareradiosystems/radio-breaker:latest"
+			rbImg = "docker.io/qawl987/srsran-ue:latest"
 		}
 		deployments = append(deployments, radioBreakerDeployment(nfDeploy, rbImg, srsranCfg.Spec.UECount))
 	}
@@ -337,8 +327,9 @@ func mcsTableOrDefault(v string) string {
 	return v
 }
 
-func gnbDeployment(nfDeploy *workloadv1alpha1.NFDeployment, component, image, cmName, cfgFileName string, podAnnotations map[string]string) *appsv1.Deployment {
+func gnbDeployment(nfDeploy *workloadv1alpha1.NFDeployment, component, image, cmName string, podAnnotations map[string]string) *appsv1.Deployment {
 	appLabel := fmt.Sprintf("srsran-%s", component)
+	entrypoint := fmt.Sprintf("/usr/local/bin/entrypoint-%s.sh", component)
 	return &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -361,15 +352,17 @@ func gnbDeployment(nfDeploy *workloadv1alpha1.NFDeployment, component, image, cm
 					ServiceAccountName: "srsran-gnb-sa",
 					Containers: []corev1.Container{
 						{
-							Name:  component,
-							Image: image,
+							Name:            component,
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{entrypoint},
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: ptr.To(true),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "config",
-									MountPath: "/etc/srsran",
+									MountPath: "/etc/config",
 								},
 							},
 						},
@@ -414,19 +407,17 @@ func duDeployment(nfDeploy *workloadv1alpha1.NFDeployment, image, cmName string,
 					ServiceAccountName: "srsran-gnb-sa",
 					Containers: []corev1.Container{
 						{
-							Name:  "du",
-							Image: image,
+							Name:            "du",
+							Image:           image,
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							Command:         []string{"/usr/local/bin/entrypoint-du.sh"},
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: ptr.To(true),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "config",
-									MountPath: "/etc/srsran",
-								},
-								{
-									Name:      "qos-config",
-									MountPath: "/etc/srsran/qos",
+									MountPath: "/etc/config",
 								},
 							},
 						},
@@ -437,20 +428,6 @@ func duDeployment(nfDeploy *workloadv1alpha1.NFDeployment, image, cmName string,
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
-									Items: []corev1.KeyToPath{
-										{Key: "du.yml", Path: "du.yml"},
-									},
-								},
-							},
-						},
-						{
-							Name: "qos-config",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
-									Items: []corev1.KeyToPath{
-										{Key: "qos.yml", Path: "qos.yml"},
-									},
 								},
 							},
 						},

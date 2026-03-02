@@ -169,7 +169,7 @@ func TestGetConfigMapCUCPContainsN2IP(t *testing.T) {
 		}
 	}
 	require.NotNil(t, cucpCM)
-	cuCPYml := cucpCM.Data["cu_cp.yml"]
+	cuCPYml := cucpCM.Data["gnb-config.yml"]
 	assert.Contains(t, cuCPYml, "10.0.2.10", "CU-CP config must contain N2 IP")
 	assert.Contains(t, cuCPYml, "20893", "CU-CP config must contain PLMN")
 }
@@ -191,7 +191,7 @@ func TestGetConfigMapDUContainsCellConfig(t *testing.T) {
 		}
 	}
 	require.NotNil(t, duCM)
-	duYml := duCM.Data["du.yml"]
+	duYml := duCM.Data["gnb-config.yml"]
 	assert.Contains(t, duYml, "368500", "DU config must contain dl_arfcn")
 	assert.Contains(t, duYml, "10.0.5.10", "DU config must contain F1C IP")
 }

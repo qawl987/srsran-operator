@@ -4,11 +4,11 @@ metadata:
   name: gnb-srsran-config
   namespace: example
 spec:
-  cucpImage: "docker.io/softwareradiosystems/srsran-project:latest"
-  cuupImage: "docker.io/softwareradiosystems/srsran-project:latest"
-  duImage: "docker.io/softwareradiosystems/srsran-project:latest"
-  ueImage: "docker.io/softwareradiosystems/srsue:latest"
-  radioBreakerImage: "docker.io/softwareradiosystems/radio-breaker:latest"
+  cucpImage: "docker.io/qawl987/srsran-split:latest"
+  cuupImage: "docker.io/qawl987/srsran-split:latest"
+  duImage: "docker.io/qawl987/srsran-split:latest"
+  ueImage: "docker.io/qawl987/srsran-ue:latest"
+  radioBreakerImage: "docker.io/qawl987/srsran-ue:latest"
   zmqMode: true
   srate: "23.04"
   txGain: 75
