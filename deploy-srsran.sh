@@ -242,6 +242,13 @@ if ! command -v docker &>/dev/null; then
     warn "docker not available – skipping image build."
     warn "Ensure ${IMG} is already accessible in ${WORKER_NODE}."
 else
+    # Compile Go binary first (Dockerfile uses pre-built binary via COPY manager .)
+    info "Compiling Go binary..."
+    cd "${SCRIPT_DIR}"
+    go build -o manager ./cmd/main.go \
+        || die "go build failed"
+    ok "manager binary compiled"
+
     info "Building ${IMG} from ${SCRIPT_DIR}..."
     docker build -t "${IMG}" "${SCRIPT_DIR}" \
         || die "docker build failed"
@@ -252,8 +259,9 @@ else
         --name "${CLUSTER_NAME}" 2>/dev/null \
         || {
             warn "kind load failed – trying docker save | docker exec..."
+            # Must use -n k8s.io so kubelet can find the image in containerd
             docker save "${IMG}" \
-                | sudo docker exec -i "${WORKER_NODE}" ctr images import - \
+                | sudo docker exec -i "${WORKER_NODE}" ctr -n k8s.io images import - \
                 || warn "Image load may have failed; continuing anyway"
         }
     ok "Image loaded into ${WORKER_NODE}"
@@ -458,40 +466,11 @@ fi
 # ── Step 8: Create PackageVariantSet to deploy blueprint to all matching clusters ─
 echo ""
 echo "=== Step 8: Create PackageVariantSet srsran-gnb (site-type=${SITE_TYPE}) ==="
-# Uses PackageVariantSet (v1alpha2) so that every WorkloadCluster labeled
-# nephio.org/site-type=<SITE_TYPE> automatically receives a rendered copy.
-# Currently that is the single "${CLUSTER_NAME}" node; adding more nodes later
-# requires only adding the label – no script changes needed.
-#
-# injectors.nameExpr: target.name  →  Porch substitutes the WorkloadCluster
-# name at render time so the IPAM / interface-fn know which cluster to use.
-cat > /tmp/srsran-packagevariantset.yaml <<EOF
-apiVersion: config.porch.kpt.dev/v1alpha2
-kind: PackageVariantSet
-metadata:
-  name: srsran-gnb
-  namespace: default
-spec:
-  upstream:
-    repo: ${CATALOG_REPO}
-    package: ${CATALOG_PKG}
-    workspaceName: main
-  targets:
-  - objectSelector:
-      apiVersion: infra.nephio.org/v1alpha1
-      kind: WorkloadCluster
-      matchLabels:
-        nephio.org/site-type: ${SITE_TYPE}
-    template:
-      downstream:
-        package: ${DOWNSTREAM_PKG}
-      annotations:
-        approval.nephio.org/policy: always
-      injectors:
-      - nameExpr: target.name
-EOF
-
-kubectl apply -f /tmp/srsran-packagevariantset.yaml
+# Uses srsran-pvset.yaml (committed in the same repo) as the single source of
+# truth for the PackageVariantSet spec. Targets every WorkloadCluster labeled
+# nephio.org/site-type=combined; adding more clusters later requires only
+# adding the label – no script changes needed.
+kubectl apply -f "${SCRIPT_DIR}/srsran-pvset.yaml"
 ok "PackageVariantSet srsran-gnb applied (targets: site-type=${SITE_TYPE})"
 info "Porch will create one PackageRevision per matching WorkloadCluster."
 

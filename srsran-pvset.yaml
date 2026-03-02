@@ -1,0 +1,23 @@
+apiVersion: config.porch.kpt.dev/v1alpha2
+kind: PackageVariantSet
+metadata:
+  name: srsran-gnb
+  namespace: default
+spec:
+  upstream:
+    repo: catalog-workloads-srsran
+    package: pkg-srsran
+    workspaceName: main
+  targets:
+  - objectSelector:
+      apiVersion: infra.nephio.org/v1alpha1
+      kind: WorkloadCluster
+      matchLabels:
+        nephio.org/site-type: combined
+    template:
+      downstream:
+        package: srsran-gnb
+      annotations:
+        approval.nephio.org/policy: always
+      injectors:
+      - nameExpr: target.name
