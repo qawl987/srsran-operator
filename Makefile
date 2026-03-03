@@ -92,3 +92,25 @@ deploy: manifests ## Deploy controller to the K8s cluster specified in ~/.kube/c
 undeploy: ## Undeploy controller from the K8s cluster.
 	kubectl delete --ignore-not-found=$(ignore-not-found) -f config/rbac/
 	kubectl delete --ignore-not-found=$(ignore-not-found) -f config/manager/
+
+##@ srsRAN gNB Scale
+
+GNB_KUBECONFIG ?= /home/free5gc/regional.kubeconfig
+GNB_NS         ?= srsran-gnb
+GNB_CLUSTER    ?= regional
+
+.PHONY: gnb-down
+gnb-down: ## Scale down CU-CP, CU-UP, DU deployments to 0.
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) scale deployment \
+		gnb-$(GNB_CLUSTER)-cucp \
+		gnb-$(GNB_CLUSTER)-cuup \
+		gnb-$(GNB_CLUSTER)-du \
+		--replicas=0 -n $(GNB_NS)
+
+.PHONY: gnb-up
+gnb-up: ## Scale up CU-CP, CU-UP, DU deployments to 1.
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) scale deployment \
+		gnb-$(GNB_CLUSTER)-cucp \
+		gnb-$(GNB_CLUSTER)-cuup \
+		gnb-$(GNB_CLUSTER)-du \
+		--replicas=1 -n $(GNB_NS)
