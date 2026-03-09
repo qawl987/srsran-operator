@@ -34,7 +34,7 @@ die()     { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 CLUSTER_NAME="${CLUSTER_NAME:-regional}"
-WORKER_NODE="${WORKER_NODE:-regional-md-0-n5x7s-qqwrs-q8zwx}"
+WORKER_NODE="${WORKER_NODE:-regional-md-0-d55dw-lx5gd-sp69g}"
 KUBECONFIG_FILE="${KUBECONFIG_FILE:-/home/free5gc/regional.kubeconfig}"
 
 # Gitea / Porch repository settings
@@ -116,16 +116,28 @@ ok "Pre-flight checks passed"
 
 # ── Step 1: Label WorkloadCluster ─────────────────────────────────────────────
 echo ""
-echo "=== Step 1: Ensure WorkloadCluster label ==="
+echo "=== Step 1: Verify WorkloadCluster label ==="
+# IMPORTANT: Do NOT unconditionally use --overwrite here.
+# Even when the label value is unchanged, kubectl label --overwrite sends an
+# HTTP PATCH which bumps the WorkloadCluster resourceVersion. The PackageVariant
+# controller's informer detects the change and re-reconciles, spawning an extra
+# PackageRevision in Proposed state (e.g. packagevariant-2).
+# Only write the label if it is missing or incorrect.
 if kubectl get workloadcluster "${CLUSTER_NAME}" -n default &>/dev/null; then
-    kubectl label workloadcluster "${CLUSTER_NAME}" \
-        nephio.org/site-type=combined \
-        --overwrite -n default
-    ok "WorkloadCluster '${CLUSTER_NAME}' labeled site-type=combined"
+    CURRENT_SITE_TYPE=$(kubectl get workloadcluster "${CLUSTER_NAME}" -n default \
+        -o jsonpath='{.metadata.labels.nephio\.org/site-type}' 2>/dev/null || true)
+    if [[ "${CURRENT_SITE_TYPE}" == "${SITE_TYPE}" ]]; then
+        ok "WorkloadCluster '${CLUSTER_NAME}' already labeled site-type=${SITE_TYPE} – skipping (no API write)"
+    else
+        kubectl label workloadcluster "${CLUSTER_NAME}" \
+            nephio.org/site-type=${SITE_TYPE} \
+            --overwrite -n default
+        ok "WorkloadCluster '${CLUSTER_NAME}' labeled site-type=${SITE_TYPE}"
+    fi
 else
     warn "WorkloadCluster '${CLUSTER_NAME}' not found in management cluster."
-    warn "If you haven't created it yet, run:"
-    warn "  kubectl label workloadcluster ${CLUSTER_NAME} nephio.org/site-type=combined --overwrite -n default"
+    warn "Please label it manually before re-running:"
+    warn "  kubectl label workloadcluster ${CLUSTER_NAME} nephio.org/site-type=${SITE_TYPE} -n default"
 fi
 
 # ── Step 2: VLAN interfaces on worker node ────────────────────────────────────
@@ -500,8 +512,11 @@ if [[ -z "${SRSRAN_REV}" ]]; then
     warn "Then manually: porchctl rpkg propose <rev> -n default"
     warn "               porchctl rpkg approve <rev> -n default"
 else
-    # Approve ALL non-Published revisions for this package (Porch may generate
-    # packagevariant-1, packagevariant-2, etc. across multiple reconcile cycles)
+    # Approve ALL non-Published revisions for this package.
+    # Note: Step 1 is now conditional (no unnecessary API write), so PackageVariant
+    # should NOT re-reconcile and only one PackageRevision is expected.
+    # The second-pass check below is a lightweight safety net for edge cases
+    # (e.g. upstream blueprint update racing with deployment).
     ALL_REVS=$(porchctl rpkg get -n default 2>/dev/null \
         | grep "${CLUSTER_NAME}\.${DOWNSTREAM_PKG}\." \
         | grep -v "Published" \
@@ -529,6 +544,20 @@ else
                 ok "Already Published: ${rev}"
             fi
         done
+    fi
+
+    # Second-pass: wait 20s then check once more for any stragglers
+    info "Waiting 20s then doing a final check for any late-appearing Proposed revisions..."
+    sleep 20
+    LATE_REVS=$(porchctl rpkg get -n default 2>/dev/null \
+        | grep "${CLUSTER_NAME}\.${DOWNSTREAM_PKG}\." \
+        | grep -v "Published" \
+        | awk '{print $1}')
+    if [[ -n "${LATE_REVS}" ]]; then
+        warn "Late Proposed revision(s) detected: ${LATE_REVS}"
+        warn "Approve manually: porchctl rpkg approve <rev> -n default"
+    else
+        ok "All PackageRevisions for ${DOWNSTREAM_PKG} are Published"
     fi
 fi
 
