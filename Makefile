@@ -93,11 +93,56 @@ undeploy: ## Undeploy controller from the K8s cluster.
 	kubectl delete --ignore-not-found=$(ignore-not-found) -f config/rbac/
 	kubectl delete --ignore-not-found=$(ignore-not-found) -f config/manager/
 
-##@ srsRAN gNB Scale
+##@ Kind Redeploy
 
+# Configurable variables – override on command line if needed.
+KIND_WORKER    ?= regional-md-0-d55dw-lx5gd-sp69g
+OPERATOR_NS    ?= srsran
 GNB_KUBECONFIG ?= /home/free5gc/regional.kubeconfig
 GNB_NS         ?= srsran-gnb
 GNB_CLUSTER    ?= regional
+
+.PHONY: build-linux
+build-linux: ## Build the manager binary for linux/amd64 (no CGO).
+	CGO_ENABLED=0 GOOS=linux go build -o manager ./cmd/main.go
+
+.PHONY: docker-build-sudo
+docker-build-sudo: ## Build the container image using sudo docker.
+	sudo docker build -t $(IMG) .
+
+.PHONY: kind-load
+kind-load: ## Save the image and import it into the kind worker node via ctr.
+	sudo docker save $(IMG) | \
+		sudo docker exec -i $(KIND_WORKER) ctr -n k8s.io images import -
+
+.PHONY: restart-operator
+restart-operator: ## Rollout-restart the srsran-operator deployment and wait for it.
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) rollout restart \
+		deployment/srsran-operator -n $(OPERATOR_NS)
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) rollout status \
+		deployment/srsran-operator -n $(OPERATOR_NS) --timeout=60s
+
+.PHONY: restart-gnb
+restart-gnb: ## Rollout-restart all three gNB deployments and wait for them.
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) rollout restart \
+		deployment/gnb-$(GNB_CLUSTER)-cucp \
+		deployment/gnb-$(GNB_CLUSTER)-cuup \
+		deployment/gnb-$(GNB_CLUSTER)-du \
+		-n $(GNB_NS)
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) rollout status \
+		deployment/gnb-$(GNB_CLUSTER)-cucp -n $(GNB_NS) --timeout=120s
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) rollout status \
+		deployment/gnb-$(GNB_CLUSTER)-cuup -n $(GNB_NS) --timeout=120s
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) rollout status \
+		deployment/gnb-$(GNB_CLUSTER)-du   -n $(GNB_NS) --timeout=120s
+
+.PHONY: restart-all
+restart-all: build-linux docker-build-sudo kind-load restart-operator ## Full redeploy: build → docker → kind load → restart operator → restart gnb.
+	@echo "Waiting 15s for operator to fully start and reconcile..."
+	sleep 15
+	$(MAKE) restart-gnb
+
+##@ srsRAN gNB Scale
 
 .PHONY: gnb-down
 gnb-down: ## Scale down CU-CP, CU-UP, DU deployments to 0.
@@ -114,3 +159,18 @@ gnb-up: ## Scale up CU-CP, CU-UP, DU deployments to 1.
 		gnb-$(GNB_CLUSTER)-cuup \
 		gnb-$(GNB_CLUSTER)-du \
 		--replicas=1 -n $(GNB_NS)
+
+du-down: ## Scale down CU-CP, CU-UP, DU deployments to 0.
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) scale deployment \
+		gnb-$(GNB_CLUSTER)-du \
+		--replicas=0 -n $(GNB_NS)
+
+cp-down: ## Scale down CU-CP, CU-UP, DU deployments to 0.
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) scale deployment \
+		gnb-$(GNB_CLUSTER)-cucp \
+		--replicas=0 -n $(GNB_NS)
+
+up-down: ## Scale down CU-CP, CU-UP, DU deployments to 0.
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) scale deployment \
+		gnb-$(GNB_CLUSTER)-cuup \
+		--replicas=0 -n $(GNB_NS)
