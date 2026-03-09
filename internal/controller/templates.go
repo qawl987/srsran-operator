@@ -256,11 +256,13 @@ type DUConfigValues struct {
 	F1CBindAddr string
 	// F1UBindAddr is the DU F1-U (user plane) bind address.
 	F1UBindAddr string
-	// ZMQBindAddr is the address the DU ZMQ RF socket binds to.
-	ZMQBindAddr string
-	// ZMQTxPort is the ZMQ TX port.
+	// ZMQTxAddr is the address the DU ZMQ TX socket connects to (UE's IP).
+	ZMQTxAddr string
+	// ZMQTxPort is the ZMQ TX port (on ZMQTxAddr, i.e. UE side).
 	ZMQTxPort int
-	// ZMQRxPort is the ZMQ RX port.
+	// ZMQRxAddr is the address the DU ZMQ RX socket binds to (DU's own F1U IP).
+	ZMQRxAddr string
+	// ZMQRxPort is the ZMQ RX port (on ZMQRxAddr, i.e. DU side).
 	ZMQRxPort int
 	// SRate is the RF sample rate in MHz (e.g. "23.04").
 	SRate string
@@ -305,7 +307,7 @@ f1u:
 
 ru_sdr:
   device_driver: zmq
-  device_args: tx_port=tcp://{{ .ZMQBindAddr }}:{{ .ZMQTxPort }},rx_port=tcp://{{ .ZMQBindAddr }}:{{ .ZMQRxPort }},base_srate={{ .SRate }}e6
+  device_args: tx_port=tcp://{{ .ZMQTxAddr }}:{{ .ZMQTxPort }},rx_port=tcp://{{ .ZMQRxAddr }}:{{ .ZMQRxPort }},base_srate={{ .SRate }}e6
   srate: {{ .SRate }}
   tx_gain: {{ .TxGain }}
   rx_gain: {{ .RxGain }}

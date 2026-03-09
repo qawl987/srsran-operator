@@ -26,6 +26,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 
 	"github.com/go-logr/logr"
 	workloadv1alpha1 "github.com/nephio-project/api/workload/v1alpha1"
@@ -51,6 +52,18 @@ const (
 	zmqTxPort = 2000
 	zmqRxPort = 2001
 )
+
+// nextIPInSubnet returns the IP with the last octet incremented by 1.
+// Used to derive the UE ZMQ address from the DU's F1U interface IP.
+// e.g. 172.6.0.0 → 172.6.0.1
+func nextIPInSubnet(ipStr string) string {
+	ip := net.ParseIP(ipStr).To4()
+	if ip == nil {
+		return ipStr
+	}
+	ip[3]++
+	return ip.String()
+}
 
 // GnbResources implements NfResource for the srsRAN gNB (CU-CP + CU-UP + DU).
 type GnbResources struct{}
@@ -156,7 +169,13 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 
 	// ── DU ConfigMap ─────────────────────────────────────────────────────────
 	// DU connects to CU-CP via the Kubernetes Service srsran-cucp-f1c-svc.
-	// ZMQ RF socket binds to the DU pod's own F1U IP (reachable from UE pod).
+	// ZMQ RF (srsRAN5G gNB semantics):
+	//   tx_port = DU BIND on its own F1U IP (DL path; UE connects here)
+	//   rx_port = DU CONNECT to UE's tx bind (UL path; UE binds nextIP:zmqRxPort)
+	// Correct pairing with UE device_args:
+	//   tx_port=tcp://<UE_IP>:zmqRxPort(2001)  ← UE binds, DU connects
+	//   rx_port=tcp://<DU_F1U_IP>:zmqTxPort(2000) ← DU binds, UE connects
+	ueZmqIP := nextIPInSubnet(f1uIp)
 	srate := srsranCfg.Spec.SRate
 	if srate == "" {
 		srate = "23.04"
@@ -165,8 +184,9 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 		F1CCUCPAddr:         cucpF1CServiceName(nfDeploy.Name),
 		F1CBindAddr:         f1cIp,
 		F1UBindAddr:         f1uIp,
-		ZMQBindAddr:         f1uIp,
+		ZMQTxAddr:           f1uIp,
 		ZMQTxPort:           zmqTxPort,
+		ZMQRxAddr:           ueZmqIP,
 		ZMQRxPort:           zmqRxPort,
 		SRate:               srate,
 		TxGain:              txGainOrDefault(srsranCfg.Spec.TxGain),
