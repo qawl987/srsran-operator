@@ -17,3 +17,4 @@ spec:
   sliceIntent:
     type: eMBB
     fiveQI: 9
+  amfAddr: "172.2.0.254"
