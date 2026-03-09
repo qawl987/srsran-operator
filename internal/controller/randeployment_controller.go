@@ -58,7 +58,6 @@ func GetSupportedProviders() []string {
 type NfResource interface {
 	GetServiceAccount() []*corev1.ServiceAccount
 	GetConfigMap(logr.Logger, *workloadv1alpha1.NFDeployment, *ConfigInfo) []*corev1.ConfigMap
-	createNetworkAttachmentDefinitionNetworks(string, *workloadv1alpha1.NFDeploymentSpec) (string, error)
 	GetDeployment(logr.Logger, *workloadv1alpha1.NFDeployment, *ConfigInfo) []*appsv1.Deployment
 	GetService() []*corev1.Service
 }

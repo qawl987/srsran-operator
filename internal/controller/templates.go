@@ -163,7 +163,7 @@ cu_cp:
     bind_addr: {{ .F1CBindAddr }}
 
 log:
-  filename: /tmp/cu_cp.log
+  filename: /tmp/logs/cu_cp.log
   all_level: info
 
 pcap:
@@ -219,7 +219,7 @@ cu_up:
     - bind_addr: {{ .F1UBindAddr }}
 
 log:
-  filename: /tmp/cu_up.log
+  filename: /tmp/logs/cu_up.log
   all_level: info
 
 pcap:
@@ -335,7 +335,7 @@ cell_cfg:
     mcs_table: {{ .PUSCHMcsTable }}
 
 log:
-  filename: /tmp/du.log
+  filename: /tmp/logs/du.log
   all_level: info
 
 pcap:

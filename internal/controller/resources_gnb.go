@@ -40,6 +40,11 @@ import (
 )
 
 const (
+	// gnbLogHostBasePath is the host directory under which per-component log
+	// subdirectories live (cucp/, cuup/, du/).  The path must exist on the
+	// worker node before the pods start.
+	gnbLogHostBasePath = "/home/free5gc/srsran-helm/srsran-logs"
+
 	// zmqBasePort is the first ZMQ TX port for srsUE.
 	// Each additional UE gets +2 (TX/RX pair).
 	zmqBasePort = 2000
@@ -53,16 +58,60 @@ const (
 	zmqRxPort = 2001
 )
 
-// nextIPInSubnet returns the IP with the last octet incremented by 1.
-// Used to derive the UE ZMQ address from the DU's F1U interface IP.
-// e.g. 172.6.0.0 → 172.6.0.1
-func nextIPInSubnet(ipStr string) string {
+// offsetIP returns the IPv4 address with the last octet incremented by offset.
+// e.g. offsetIP("172.6.0.0", 2) → "172.6.0.2"
+func offsetIP(ipStr string, offset int) string {
 	ip := net.ParseIP(ipStr).To4()
 	if ip == nil {
 		return ipStr
 	}
-	ip[3]++
+	ip[3] = byte(int(ip[3]) + offset)
 	return ip.String()
+}
+
+// nextIPInSubnet is a convenience wrapper for offsetIP(..., 1).
+func nextIPInSubnet(ipStr string) string { return offsetIP(ipStr, 1) }
+
+// offsetIPCIDR returns a CIDR string with the host part incremented by offset.
+// e.g. offsetIPCIDR("172.6.0.0/24", 2) → "172.6.0.2/24"
+func offsetIPCIDR(cidr string, offset int) string {
+	ip, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return cidr
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return cidr
+	}
+	ip4[3] = byte(int(ip4[3]) + offset)
+	ones, _ := ipNet.Mask.Size()
+	return fmt.Sprintf("%s/%d", ip4.String(), ones)
+}
+
+// withIPOffset returns a copy of ic with its IPv4 address offset by the given amount.
+func withIPOffset(ic workloadv1alpha1.InterfaceConfig, offset int) workloadv1alpha1.InterfaceConfig {
+	if ic.IPv4 == nil || offset == 0 {
+		return ic
+	}
+	copy := ic
+	ipv4copy := *ic.IPv4
+	ipv4copy.Address = offsetIPCIDR(ic.IPv4.Address, offset)
+	copy.IPv4 = &ipv4copy
+	return copy
+}
+
+// applyOffsets applies per-interface IP offsets to a slice of InterfaceConfigs.
+// offsets maps interface name → last-octet offset to add.
+func applyOffsets(ics []workloadv1alpha1.InterfaceConfig, offsets map[string]int) []workloadv1alpha1.InterfaceConfig {
+	out := make([]workloadv1alpha1.InterfaceConfig, len(ics))
+	for i, ic := range ics {
+		if off, ok := offsets[ic.Name]; ok {
+			out[i] = withIPOffset(ic, off)
+		} else {
+			out[i] = ic
+		}
+	}
+	return out
 }
 
 // GnbResources implements NfResource for the srsRAN gNB (CU-CP + CU-UP + DU).
@@ -137,12 +186,24 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 		log.Info("SrsRANConfig.spec.amfAddr not set; using placeholder", "amfAddr", amfAddr)
 	}
 
+	// ── Component-specific Multus IPs ────────────────────────────────────────
+	// Each component gets a unique host address on shared subnets:
+	//   DU    → .0 (original IPAM allocation)
+	//   CU-CP → .1 (e1, f1c interfaces)
+	//   CU-UP → .2 (e1, f1u interfaces)
+	// N2 and N3 are single-consumer subnets: use .0.
+	cucpE1IP  := offsetIP(e1Ip, ipOffsetCUCP)   // 172.4.0.1
+	cucpF1CIP := offsetIP(f1cIp, ipOffsetCUCP)  // 172.5.0.1
+	cuupE1IP  := offsetIP(e1Ip, ipOffsetCUUP)   // 172.4.0.2
+	cuupF1UIP := offsetIP(f1uIp, ipOffsetCUUP)  // 172.6.0.2
+	// DU keeps original IPAM IPs (f1c=.0, f1u=.0)
+
 	// ── CU-CP ConfigMap ──────────────────────────────────────────────────────
 	cucpCfg, err := renderCUCPConfig(CUCPConfigValues{
 		N2BindAddr:               n2Ip,
 		AMFAddr:                  amfAddr,
-		E1BindAddr:               e1Ip,
-		F1CBindAddr:              f1cIp,
+		E1BindAddr:               cucpE1IP,
+		F1CBindAddr:              cucpF1CIP,
 		PLMN:                     plmnCfg.Spec.PLMN,
 		TAC:                      plmnCfg.Spec.TAC,
 		Slices:                   plmnCfg.Spec.Slices,
@@ -155,12 +216,12 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 	}
 
 	// ── CU-UP ConfigMap ──────────────────────────────────────────────────────
-	// CU-UP connects to CU-CP via the Kubernetes Service srsran-cucp-e1-svc.
+	// CU-UP connects directly to CU-CP's Multus E1 IP (no ClusterIP service).
 	cuupCfg, err := renderCUUPConfig(CUUPConfigValues{
-		E1CUCPAddr:  cucpE1ServiceName(nfDeploy.Name),
-		E1BindAddr:  e1Ip,
+		E1CUCPAddr:  cucpE1IP,
+		E1BindAddr:  cuupE1IP,
 		N3BindAddr:  n3Ip,
-		F1UBindAddr: f1uIp,
+		F1UBindAddr: cuupF1UIP,
 	})
 	if err != nil {
 		log.Error(err, "Failed to render CU-UP config template")
@@ -168,20 +229,17 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 	}
 
 	// ── DU ConfigMap ─────────────────────────────────────────────────────────
-	// DU connects to CU-CP via the Kubernetes Service srsran-cucp-f1c-svc.
+	// DU connects directly to CU-CP's Multus F1C IP (no ClusterIP service).
 	// ZMQ RF (srsRAN5G gNB semantics):
-	//   tx_port = DU BIND on its own F1U IP (DL path; UE connects here)
-	//   rx_port = DU CONNECT to UE's tx bind (UL path; UE binds nextIP:zmqRxPort)
-	// Correct pairing with UE device_args:
-	//   tx_port=tcp://<UE_IP>:zmqRxPort(2001)  ← UE binds, DU connects
-	//   rx_port=tcp://<DU_F1U_IP>:zmqTxPort(2000) ← DU binds, UE connects
-	ueZmqIP := nextIPInSubnet(f1uIp)
+	//   tx_port = DU BIND on its own F1U IP (.0) for DL (UE connects here)
+	//   rx_port = DU CONNECT to UE's tx bind (.1:zmqRxPort) for UL
+	ueZmqIP := nextIPInSubnet(f1uIp) // 172.6.0.1 = UE ZMQ tx bind
 	srate := srsranCfg.Spec.SRate
 	if srate == "" {
 		srate = "23.04"
 	}
 	duCfg, err := renderDUConfig(DUConfigValues{
-		F1CCUCPAddr:         cucpF1CServiceName(nfDeploy.Name),
+		F1CCUCPAddr:         cucpF1CIP,
 		F1CBindAddr:         f1cIp,
 		F1UBindAddr:         f1uIp,
 		ZMQTxAddr:           f1uIp,
@@ -236,13 +294,47 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 	}
 }
 
-// createNetworkAttachmentDefinitionNetworks builds the Multus annotation value
-// for a given set of interface names.
-func (g GnbResources) createNetworkAttachmentDefinitionNetworks(templateName string, spec *workloadv1alpha1.NFDeploymentSpec) (string, error) {
-	return CreateNetworkAttachmentDefinitionNetworks(templateName, map[string][]workloadv1alpha1.InterfaceConfig{
-		"n2":  GetInterfaceConfigs(spec.Interfaces, "n2"),
-		"n3":  GetInterfaceConfigs(spec.Interfaces, "n3"),
-		"e1":  GetInterfaceConfigs(spec.Interfaces, "e1"),
+// IP offset constants: each component gets a unique host IP per shared subnet.
+//
+//	DU    → offset 0  (keeps original IPAM .0 address)
+//	CU-CP → offset 1  (e.g. 172.5.0.1 on f1c, 172.4.0.1 on e1)
+//	CU-UP → offset 2  (e.g. 172.6.0.2 on f1u, 172.4.0.2 on e1)
+//
+// N2 and N3 are each used by only one srsRAN pod so no offset is needed there.
+const (
+	ipOffsetDU   = 0
+	ipOffsetCUCP = 1
+	ipOffsetCUUP = 2
+)
+
+// cucpNADAnnotation builds the Multus annotation for the CU-CP pod.
+// CU-CP uses: n2 (offset 0 – only consumer), e1 (offset 1), f1c (offset 1).
+func (g GnbResources) cucpNADAnnotation(name string, spec *workloadv1alpha1.NFDeploymentSpec) (string, error) {
+	offsets := map[string]int{"e1": ipOffsetCUCP, "f1c": ipOffsetCUCP}
+	all := applyOffsets(spec.Interfaces, offsets)
+	return CreateNetworkAttachmentDefinitionNetworks(name, map[string][]workloadv1alpha1.InterfaceConfig{
+		"n2":  GetInterfaceConfigs(all, "n2"),
+		"e1":  GetInterfaceConfigs(all, "e1"),
+		"f1c": GetInterfaceConfigs(all, "f1c"),
+	})
+}
+
+// cuupNADAnnotation builds the Multus annotation for the CU-UP pod.
+// CU-UP uses: n3 (offset 0 – only consumer), e1 (offset 2), f1u (offset 2).
+func (g GnbResources) cuupNADAnnotation(name string, spec *workloadv1alpha1.NFDeploymentSpec) (string, error) {
+	offsets := map[string]int{"e1": ipOffsetCUUP, "f1u": ipOffsetCUUP}
+	all := applyOffsets(spec.Interfaces, offsets)
+	return CreateNetworkAttachmentDefinitionNetworks(name, map[string][]workloadv1alpha1.InterfaceConfig{
+		"n3":  GetInterfaceConfigs(all, "n3"),
+		"e1":  GetInterfaceConfigs(all, "e1"),
+		"f1u": GetInterfaceConfigs(all, "f1u"),
+	})
+}
+
+// duNADAnnotation builds the Multus annotation for the DU pod.
+// DU uses: f1c (offset 0), f1u (offset 0).
+func (g GnbResources) duNADAnnotation(name string, spec *workloadv1alpha1.NFDeploymentSpec) (string, error) {
+	return CreateNetworkAttachmentDefinitionNetworks(name, map[string][]workloadv1alpha1.InterfaceConfig{
 		"f1c": GetInterfaceConfigs(spec.Interfaces, "f1c"),
 		"f1u": GetInterfaceConfigs(spec.Interfaces, "f1u"),
 	})
@@ -257,15 +349,25 @@ func (g GnbResources) GetDeployment(log logr.Logger, nfDeploy *workloadv1alpha1.
 		return nil
 	}
 
-	nadNetworks, err := g.createNetworkAttachmentDefinitionNetworks(nfDeploy.Name, &nfDeploy.Spec)
+	cucpNAD, err := g.cucpNADAnnotation(nfDeploy.Name, &nfDeploy.Spec)
 	if err != nil {
-		log.Error(err, "Cannot build NAD networks annotation")
+		log.Error(err, "Cannot build CU-CP NAD annotation")
+		return nil
+	}
+	cuupNAD, err := g.cuupNADAnnotation(nfDeploy.Name, &nfDeploy.Spec)
+	if err != nil {
+		log.Error(err, "Cannot build CU-UP NAD annotation")
+		return nil
+	}
+	duNAD, err := g.duNADAnnotation(nfDeploy.Name, &nfDeploy.Spec)
+	if err != nil {
+		log.Error(err, "Cannot build DU NAD annotation")
 		return nil
 	}
 
-	podAnnotations := map[string]string{
-		NetworksAnnotation: nadNetworks,
-	}
+	cucpAnnotations := map[string]string{NetworksAnnotation: cucpNAD}
+	cuupAnnotations := map[string]string{NetworksAnnotation: cuupNAD}
+	duAnnotations   := map[string]string{NetworksAnnotation: duNAD}
 
 	cucpImg := srsranCfg.Spec.CUCPImage
 	if cucpImg == "" {
@@ -281,9 +383,9 @@ func (g GnbResources) GetDeployment(log logr.Logger, nfDeploy *workloadv1alpha1.
 	}
 
 	deployments := []*appsv1.Deployment{
-		gnbDeployment(nfDeploy, "cucp", cucpImg, nfDeploy.Name+"-cucp-config", podAnnotations),
-		gnbDeployment(nfDeploy, "cuup", cuupImg, nfDeploy.Name+"-cuup-config", podAnnotations),
-		duDeployment(nfDeploy, duImg, nfDeploy.Name+"-du-config", podAnnotations),
+		gnbDeployment(nfDeploy, "cucp", cucpImg, nfDeploy.Name+"-cucp-config", cucpAnnotations),
+		gnbDeployment(nfDeploy, "cuup", cuupImg, nfDeploy.Name+"-cuup-config", cuupAnnotations),
+		duDeployment(nfDeploy, duImg, nfDeploy.Name+"-du-config", duAnnotations),
 	}
 
 	// Multi-UE topology: add RadioBreaker proxy deployment.
@@ -307,16 +409,11 @@ func (g GnbResources) GetService() []*corev1.Service {
 }
 
 // GetServiceForNFDeployment returns ClusterIP services scoped to a specific NFDeployment.
-// Called from CreateAll after GetDeployment.
+// Inter-pod traffic (E1AP, F1AP, F1U) now uses direct Multus IPs with unique per-component
+// addresses, so no ClusterIP services are needed for those paths.
+// We return an empty slice; the function is kept for interface compatibility.
 func GetServiceForNFDeployment(nfDeploy *workloadv1alpha1.NFDeployment) []*corev1.Service {
-	name := nfDeploy.Name
-	ns := nfDeploy.Namespace
-	return []*corev1.Service{
-		clusterIPService(ns, cucpE1ServiceName(name), "e1ap", e1apPort),
-		clusterIPService(ns, cucpF1CServiceName(name), "f1ap", f1apPort),
-		clusterIPService(ns, name+"-cuup-f1u-svc", "f1u", f1uPort),
-		clusterIPService(ns, name+"-du-zmq-svc", "zmq", zmqTxPort),
-	}
+	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -384,6 +481,10 @@ func gnbDeployment(nfDeploy *workloadv1alpha1.NFDeployment, component, image, cm
 									Name:      "config",
 									MountPath: "/etc/config",
 								},
+								{
+									Name:      "logs",
+									MountPath: "/tmp/logs",
+								},
 							},
 						},
 					},
@@ -393,6 +494,14 @@ func gnbDeployment(nfDeploy *workloadv1alpha1.NFDeployment, component, image, cm
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
+								},
+							},
+						},
+						{
+							Name: "logs",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: fmt.Sprintf("%s/%s", gnbLogHostBasePath, component),
 								},
 							},
 						},
@@ -439,6 +548,10 @@ func duDeployment(nfDeploy *workloadv1alpha1.NFDeployment, image, cmName string,
 									Name:      "config",
 									MountPath: "/etc/config",
 								},
+								{
+									Name:      "logs",
+									MountPath: "/tmp/logs",
+								},
 							},
 						},
 					},
@@ -448,6 +561,14 @@ func duDeployment(nfDeploy *workloadv1alpha1.NFDeployment, image, cmName string,
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
+								},
+							},
+						},
+						{
+							Name: "logs",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: gnbLogHostBasePath + "/du",
 								},
 							},
 						},
