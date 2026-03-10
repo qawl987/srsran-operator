@@ -153,7 +153,7 @@ gnb-down: ## Scale down CU-CP, CU-UP, DU deployments to 0.
 		--replicas=0 -n $(GNB_NS)
 
 .PHONY: gnb-up
-gnb-up: ## Scale up CU-CP, CU-UP, DU deployments to 1.
+gnb-up: ## Scale up CU-CP, CU-UP, DU deployments to 1 (init containers handle ordering).
 	kubectl --kubeconfig=$(GNB_KUBECONFIG) scale deployment \
 		gnb-$(GNB_CLUSTER)-cucp \
 		gnb-$(GNB_CLUSTER)-cuup \

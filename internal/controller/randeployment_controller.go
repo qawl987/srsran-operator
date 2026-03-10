@@ -111,6 +111,7 @@ func (r *RANDeploymentReconciler) CreateAll(ctx context.Context, nfDeploy *workl
 		}
 		existing := dep.DeepCopy()
 		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, existing, func() error {
+			existing.Spec.Template.Spec.InitContainers = dep.Spec.Template.Spec.InitContainers
 			existing.Spec.Template.Spec.Containers = dep.Spec.Template.Spec.Containers
 			existing.Spec.Template.Spec.Volumes = dep.Spec.Template.Spec.Volumes
 			existing.Spec.Template.Annotations = dep.Spec.Template.Annotations

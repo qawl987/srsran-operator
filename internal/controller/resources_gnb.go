@@ -369,6 +369,22 @@ func (g GnbResources) GetDeployment(log logr.Logger, nfDeploy *workloadv1alpha1.
 	cuupAnnotations := map[string]string{NetworksAnnotation: cuupNAD}
 	duAnnotations   := map[string]string{NetworksAnnotation: duNAD}
 
+	// Compute CU-CP Multus IPs needed for init-container readiness checks.
+	// These mirror the same offset logic used in GetConfigMap.
+	e1Ip, err := GetFirstInterfaceConfigIPv4(nfDeploy.Spec.Interfaces, "e1")
+	if err != nil {
+		log.Error(err, "Interface e1 not found; cannot build init containers")
+		return nil
+	}
+	f1cIp, err := GetFirstInterfaceConfigIPv4(nfDeploy.Spec.Interfaces, "f1c")
+	if err != nil {
+		log.Error(err, "Interface f1c not found; cannot build init containers")
+		return nil
+	}
+	cucpE1Host  := offsetIP(e1Ip, ipOffsetCUCP)   // 172.4.0.1
+	cucpF1CHost := offsetIP(f1cIp, ipOffsetCUCP)  // 172.5.0.1
+	const cucpReadySleep = 5 // seconds to wait after ping succeeds for SCTP bind
+
 	cucpImg := srsranCfg.Spec.CUCPImage
 	if cucpImg == "" {
 		cucpImg = "docker.io/qawl987/srsran-split:latest"
@@ -384,8 +400,8 @@ func (g GnbResources) GetDeployment(log logr.Logger, nfDeploy *workloadv1alpha1.
 
 	deployments := []*appsv1.Deployment{
 		gnbDeployment(nfDeploy, "cucp", cucpImg, nfDeploy.Name+"-cucp-config", cucpAnnotations),
-		gnbDeployment(nfDeploy, "cuup", cuupImg, nfDeploy.Name+"-cuup-config", cuupAnnotations),
-		duDeployment(nfDeploy, duImg, nfDeploy.Name+"-du-config", duAnnotations),
+		gnbDeploymentWithInit(nfDeploy, "cuup", cuupImg, nfDeploy.Name+"-cuup-config", cuupAnnotations, cucpE1Host, cucpReadySleep),
+		duDeploymentWithInit(nfDeploy, duImg, nfDeploy.Name+"-du-config", duAnnotations, cucpF1CHost, cucpReadySleep),
 	}
 
 	// Multi-UE topology: add RadioBreaker proxy deployment.
@@ -512,6 +528,34 @@ func gnbDeployment(nfDeploy *workloadv1alpha1.NFDeployment, component, image, cm
 	}
 }
 
+// waitForIPInitContainer returns an init container that pings the target IP
+// until it responds (confirming the pod is Running and its Multus interface is up),
+// then sleeps briefly to let the srsRAN process finish binding its SCTP sockets.
+// Note: E1AP/F1AP use SCTP, so nc -z (TCP) would never succeed; ping is used instead.
+func waitForIPInitContainer(image, host string, extraSleep int) corev1.Container {
+	cmd := fmt.Sprintf(
+		"until ping -c1 -W1 %s >/dev/null 2>&1; do echo 'waiting for %s...'; sleep 1; done; echo '%s is reachable, waiting %ds for SCTP bind...'; sleep %d",
+		host, host, host, extraSleep, extraSleep,
+	)
+	return corev1.Container{
+		Name:            "wait-for-cucp",
+		Image:           image,
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"sh", "-c", cmd},
+	}
+}
+
+// gnbDeploymentWithInit is like gnbDeployment but prepends an init container
+// that waits until waitHost is pingable (Multus IP reachable) then sleeps
+// extraSleep seconds to let srsRAN finish binding its SCTP sockets.
+func gnbDeploymentWithInit(nfDeploy *workloadv1alpha1.NFDeployment, component, image, cmName string, podAnnotations map[string]string, waitHost string, extraSleep int) *appsv1.Deployment {
+	dep := gnbDeployment(nfDeploy, component, image, cmName, podAnnotations)
+	dep.Spec.Template.Spec.InitContainers = []corev1.Container{
+		waitForIPInitContainer(image, waitHost, extraSleep),
+	}
+	return dep
+}
+
 func duDeployment(nfDeploy *workloadv1alpha1.NFDeployment, image, cmName string, podAnnotations map[string]string) *appsv1.Deployment {
 	appLabel := "srsran-du"
 	return &appsv1.Deployment{
@@ -577,6 +621,16 @@ func duDeployment(nfDeploy *workloadv1alpha1.NFDeployment, image, cmName string,
 			},
 		},
 	}
+}
+
+// duDeploymentWithInit is like duDeployment but prepends an init container
+// that waits until waitHost is pingable then sleeps extraSleep seconds.
+func duDeploymentWithInit(nfDeploy *workloadv1alpha1.NFDeployment, image, cmName string, podAnnotations map[string]string, waitHost string, extraSleep int) *appsv1.Deployment {
+	dep := duDeployment(nfDeploy, image, cmName, podAnnotations)
+	dep.Spec.Template.Spec.InitContainers = []corev1.Container{
+		waitForIPInitContainer(image, waitHost, extraSleep),
+	}
+	return dep
 }
 
 func radioBreakerDeployment(nfDeploy *workloadv1alpha1.NFDeployment, image string, ueCount int) *appsv1.Deployment {
