@@ -191,11 +191,12 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 	//   DU    → .0 (original IPAM allocation)
 	//   CU-CP → .1 (e1, f1c interfaces)
 	//   CU-UP → .2 (e1, f1u interfaces)
-	// N2 and N3 are single-consumer subnets: use .0.
-	cucpE1IP  := offsetIP(e1Ip, ipOffsetCUCP)   // 172.4.0.1
+	//   CU-UP → .1 (n3 interface: avoid .0 network-base addr for GTP-U bind)
+	cucpE1IP  := offsetIP(e1Ip, ipOffsetCUCP)   // 172.7.0.1
 	cucpF1CIP := offsetIP(f1cIp, ipOffsetCUCP)  // 172.5.0.1
-	cuupE1IP  := offsetIP(e1Ip, ipOffsetCUUP)   // 172.4.0.2
+	cuupE1IP  := offsetIP(e1Ip, ipOffsetCUUP)   // 172.7.0.2
 	cuupF1UIP := offsetIP(f1uIp, ipOffsetCUUP)  // 172.6.0.2
+	cuupN3IP  := offsetIP(n3Ip, ipOffsetN3)     // 172.3.0.1 (avoids .0 for GTP-U)
 	// DU keeps original IPAM IPs (f1c=.0, f1u=.0)
 
 	// ── CU-CP ConfigMap ──────────────────────────────────────────────────────
@@ -220,7 +221,7 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 	cuupCfg, err := renderCUUPConfig(CUUPConfigValues{
 		E1CUCPAddr:  cucpE1IP,
 		E1BindAddr:  cuupE1IP,
-		N3BindAddr:  n3Ip,
+		N3BindAddr:  cuupN3IP,
 		F1UBindAddr: cuupF1UIP,
 	})
 	if err != nil {
@@ -300,11 +301,16 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 //	CU-CP → offset 1  (e.g. 172.5.0.1 on f1c, 172.4.0.1 on e1)
 //	CU-UP → offset 2  (e.g. 172.6.0.2 on f1u, 172.4.0.2 on e1)
 //
-// N2 and N3 are each used by only one srsRAN pod so no offset is needed there.
+// N2 is single-consumer (CU-CP only) so no offset is required; CU-CP initiates
+// outgoing SCTP and Linux has no issue using a .0 address as the source.
+// N3 is also single-consumer (CU-UP only) but CU-UP must RECEIVE GTP-U from UPF.
+// Linux / gtp5g may treat packets destined to the network-base (.0) address
+// specially, so we assign CU-UP offset +1 (172.3.0.1) to avoid the ambiguity.
 const (
-	ipOffsetDU   = 0
-	ipOffsetCUCP = 1
-	ipOffsetCUUP = 2
+	ipOffsetDU    = 0
+	ipOffsetCUCP  = 1
+	ipOffsetCUUP  = 2
+	ipOffsetN3    = 1 // CU-UP N3: use .1 (UPF uses .254; avoid .0 network-base addr)
 )
 
 // cucpNADAnnotation builds the Multus annotation for the CU-CP pod.
@@ -320,9 +326,9 @@ func (g GnbResources) cucpNADAnnotation(name string, spec *workloadv1alpha1.NFDe
 }
 
 // cuupNADAnnotation builds the Multus annotation for the CU-UP pod.
-// CU-UP uses: n3 (offset 0 – only consumer), e1 (offset 2), f1u (offset 2).
+// CU-UP uses: n3 (offset 1 → .1), e1 (offset 2), f1u (offset 2).
 func (g GnbResources) cuupNADAnnotation(name string, spec *workloadv1alpha1.NFDeploymentSpec) (string, error) {
-	offsets := map[string]int{"e1": ipOffsetCUUP, "f1u": ipOffsetCUUP}
+	offsets := map[string]int{"n3": ipOffsetN3, "e1": ipOffsetCUUP, "f1u": ipOffsetCUUP}
 	all := applyOffsets(spec.Interfaces, offsets)
 	return CreateNetworkAttachmentDefinitionNetworks(name, map[string][]workloadv1alpha1.InterfaceConfig{
 		"n3":  GetInterfaceConfigs(all, "n3"),

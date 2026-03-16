@@ -56,7 +56,7 @@ OPERATOR_NS="${OPERATOR_NS:-srsran}"
 # Network prefixes for IPAM
 N2_PREFIX="172.2.0.0/24"
 N3_PREFIX="172.3.0.0/24"
-E1_PREFIX="172.4.0.0/24"
+E1_PREFIX="172.7.0.0/24"  # vpc-internal (eth1.2) – isolated subnet, avoids ARP conflict with free5gc N4 (172.4.0.0/24 on same bridge)
 F1C_PREFIX="172.5.0.0/24"
 F1U_PREFIX="172.6.0.0/24"
 
@@ -143,13 +143,19 @@ fi
 # ── Step 2: VLAN interfaces on worker node ────────────────────────────────────
 echo ""
 echo "=== Step 2: Create VLAN interfaces on worker node ==="
-info "Creating dummy eth1 + VLANs 2–6 (N2/N3/E1/F1C/F1U) on ${WORKER_NODE}"
+info "Creating dummy eth1 + VLANs 2–6 on ${WORKER_NODE}"
 
 sudo docker exec "${WORKER_NODE}" \
     ip link add eth1 type dummy 2>/dev/null || info "eth1 already exists"
 sudo docker exec "${WORKER_NODE}" ip link set eth1 up
 
-declare -A VLAN_MAP=([2]="n2" [3]="n3" [4]="e1" [5]="f1c" [6]="f1u")
+# VLAN→macvlan master mapping (determined by Nephio network topology):
+#   eth1.2 = vpc-internal → NAD master for E1(172.7), F1C(172.5), F1U(172.6)
+#                            also free5gc N4 PFCP(172.4) ← E1 uses different subnet, no conflict
+#   eth1.3 = vpc-ran      → NAD master for N2(172.2), N3(172.3) and free5gc AMF/UPF
+#   eth1.4 = vpc-internet → NAD master for N6(10.x) – free5gc UPF only
+#   eth1.5 / eth1.6       → pre-created (reserved, not currently mapped to any NAD)
+declare -A VLAN_MAP=([2]="vpc-internal(e1/f1c/f1u)" [3]="vpc-ran(n2/n3)" [4]="vpc-internet(n6)" [5]="f1c(172.5)" [6]="f1u(172.6)")
 for vlan_id in 2 3 4 5 6; do
     iface="eth1.${vlan_id}"
     sudo docker exec "${WORKER_NODE}" \
@@ -677,7 +683,7 @@ Re-run with different cluster:
 Interface → IP prefix mapping:
   N2  (CU-CP NGAP→AMF)        ${N2_PREFIX}  vpc-ran
   N3  (CU-UP GTP-U→UPF)       ${N3_PREFIX}  vpc-ran
-  E1  (CU-CP↔CU-UP E1AP)      ${E1_PREFIX}  vpc-internal
+  E1  (CU-CP↔CU-UP E1AP)      ${E1_PREFIX}  master=eth1.2/vpc-internal (172.7 subnet, no conflict with free5gc N4 172.4)
   F1C (CU-CP↔DU   F1-AP ctrl) ${F1C_PREFIX}  vpc-internal
   F1U (CU-UP↔DU   GTP-U data) ${F1U_PREFIX}  vpc-internal
 TIPS
