@@ -6,12 +6,12 @@ metadata:
 spec:
   dlArfcn: 368500
   band: 3
-  channelBandwidthMHz: 20
+  channelBandwidthMHz: 10
   commonScs: 15
   pci: 1
   pdcch:
     ss0Index: 0
-    coreset0Index: 12
+    coreset0Index: 6
     ss2Type: common
     dciFormat01and11: false
   prach:

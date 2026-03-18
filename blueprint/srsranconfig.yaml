@@ -10,7 +10,7 @@ spec:
   ueImage: "docker.io/qawl987/srsran-ue:latest"
   radioBreakerImage: "docker.io/qawl987/srsran-ue:latest"
   zmqMode: true
-  srate: "23.04"
+  srate: "11.52"
   txGain: 75
   rxGain: 75
   ueCount: 1

@@ -96,7 +96,7 @@ undeploy: ## Undeploy controller from the K8s cluster.
 ##@ Kind Redeploy
 
 # Configurable variables – override on command line if needed.
-KIND_WORKER    ?= regional-md-0-d55dw-lx5gd-sp69g
+KIND_WORKER    ?= regional-md-0-7hcxb-z4qv6-q6r67
 OPERATOR_NS    ?= srsran
 GNB_KUBECONFIG ?= /home/free5gc/regional.kubeconfig
 GNB_NS         ?= srsran-gnb
@@ -141,6 +141,104 @@ restart-all: build-linux docker-build-sudo kind-load restart-operator ## Full re
 	@echo "Waiting 15s for operator to fully start and reconcile..."
 	sleep 15
 	$(MAKE) restart-gnb
+
+# Default: 10MHz mode. Override with: make update-gnb-config BW=20 for 20MHz.
+# 10MHz: SRATE=11.52, BW=10, CORESET0=6
+# 20MHz: SRATE=23.04, BW=20, CORESET0=12
+SRATE ?= 11.52
+BW ?= 10
+CORESET0 ?= 6
+GITEA_BASE     ?= http://nephio:secret@172.18.0.200:3000/nephio/regional.git
+
+update-gnb-config: ## Update srsRAN config in regional.git (default: 10MHz; use BW=20 for 20MHz).
+	@# ConfigSync is the single source of truth – direct configmap edits get reverted.
+	@# Operator reads from NFConfig (embedded configs), NOT from standalone SrsRANConfig/SrsRANCellConfig CRs!
+	@# So we must update: srsranconfig.yaml, srscellconfig.yaml, AND nfconfig.yaml
+	@echo "==> Updating srsRAN config: srate=$(SRATE), bandwidth=$(BW)MHz, coreset0=$(CORESET0)..."
+	@REPO_DIR=$$(mktemp -d); \
+	git clone $(GITEA_BASE) $$REPO_DIR --depth=1 -q; \
+	cd $$REPO_DIR; \
+	git config user.email "nephio@nephio.org"; \
+	git config user.name "Nephio"; \
+	SRSRAN_CFG="srsran-gnb/srsranconfig.yaml"; \
+	CELL_CFG="srsran-gnb/srscellconfig.yaml"; \
+	NF_CFG="srsran-gnb/nfconfig.yaml"; \
+	if [ ! -f $$SRSRAN_CFG ]; then \
+		echo "  Error: $$SRSRAN_CFG not found in regional.git"; \
+		rm -rf $$REPO_DIR; \
+		exit 1; \
+	fi; \
+	sed -i 's|srate: "[^"]*"|srate: "$(SRATE)"|g' $$SRSRAN_CFG; \
+	if [ -f $$CELL_CFG ]; then \
+		sed -i 's|channelBandwidthMHz: [0-9]*|channelBandwidthMHz: $(BW)|g' $$CELL_CFG; \
+		sed -i 's|coreset0Index: [0-9]*|coreset0Index: $(CORESET0)|g' $$CELL_CFG; \
+	fi; \
+	if [ -f $$NF_CFG ]; then \
+		echo "  Also updating nfconfig.yaml (operator reads embedded configs from here)..."; \
+		sed -i 's|srate: "[^"]*"|srate: "$(SRATE)"|g' $$NF_CFG; \
+		sed -i 's|channelBandwidthMHz: [0-9]*|channelBandwidthMHz: $(BW)|g' $$NF_CFG; \
+		sed -i 's|coreset0Index: [0-9]*|coreset0Index: $(CORESET0)|g' $$NF_CFG; \
+	fi; \
+	if git diff --quiet; then \
+		echo "  regional.git already has desired config – nothing to commit."; \
+	else \
+		echo "  Changed:"; \
+		git diff --no-color | head -40; \
+		git add -A; \
+		git commit -m "chore: update srsRAN to $(BW)MHz (srate=$(SRATE), coreset0=$(CORESET0))"; \
+		git push -q && echo "  ✓ Pushed config to regional.git"; \
+	fi; \
+	rm -rf $$REPO_DIR
+	@echo "==> Waiting 30s for ConfigSync to apply changes..."
+	@sleep 30
+	@echo "==> Forcing operator to regenerate gNB ConfigMaps..."
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) delete configmap \
+		gnb-$(GNB_CLUSTER)-cucp-config \
+		gnb-$(GNB_CLUSTER)-cuup-config \
+		gnb-$(GNB_CLUSTER)-du-config \
+		-n $(GNB_NS) --ignore-not-found
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) delete deployment \
+		gnb-$(GNB_CLUSTER)-cucp \
+		gnb-$(GNB_CLUSTER)-cuup \
+		gnb-$(GNB_CLUSTER)-du \
+		-n $(GNB_NS) --ignore-not-found
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) annotate nfdeployment \
+		gnb-$(GNB_CLUSTER) -n $(GNB_NS) \
+		config-update="$$(date +%s)" --overwrite
+	@echo "==> Waiting 20s for operator to recreate resources..."
+	@sleep 20
+	@echo "==> Verifying new config in DU ConfigMap:"
+	@kubectl --kubeconfig=$(GNB_KUBECONFIG) get configmap gnb-$(GNB_CLUSTER)-du-config -n $(GNB_NS) \
+		-o jsonpath='{.data.gnb-config\.yml}' 2>/dev/null | \
+		grep -E "srate:|channel_bandwidth|coreset0" || echo "  ConfigMap not ready yet"
+
+.PHONY: reconcile-gnb-config
+reconcile-gnb-config: ## Force operator to regenerate gNB ConfigMaps after updating SrsRANConfig/SrsRANCellConfig CRs.
+	@echo "==> Deleting stale gNB ConfigMaps (operator will regenerate from updated CRs)..."
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) delete configmap \
+		gnb-$(GNB_CLUSTER)-cucp-config \
+		gnb-$(GNB_CLUSTER)-cuup-config \
+		gnb-$(GNB_CLUSTER)-du-config \
+		-n $(GNB_NS) --ignore-not-found
+	@echo "==> Deleting stale gNB Deployments (operator will recreate with new ConfigMaps)..."
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) delete deployment \
+		gnb-$(GNB_CLUSTER)-cucp \
+		gnb-$(GNB_CLUSTER)-cuup \
+		gnb-$(GNB_CLUSTER)-du \
+		-n $(GNB_NS) --ignore-not-found
+	@echo "==> Annotating NFDeployment to trigger operator reconcile..."
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) annotate nfdeployment \
+		gnb-$(GNB_CLUSTER) -n $(GNB_NS) \
+		config-update="$$(date +%s)" --overwrite
+	@echo "==> Waiting 20s for operator to recreate resources..."
+	@sleep 20
+	@echo "==> Verifying new ConfigMap values..."
+	@kubectl --kubeconfig=$(GNB_KUBECONFIG) get configmap gnb-$(GNB_CLUSTER)-du-config -n $(GNB_NS) \
+		-o jsonpath='{.data.gnb-config\.yml}' 2>/dev/null | \
+		grep -E "srate:|channel_bandwidth_MHz:|coreset0_index:" || echo "  ConfigMap not ready yet"
+	@echo "==> Deployment status:"
+	@kubectl --kubeconfig=$(GNB_KUBECONFIG) get deployment -n $(GNB_NS) \
+		-l app.kubernetes.io/name=gnb 2>/dev/null || echo "  Deployments not ready yet"
 
 ##@ srsRAN gNB Scale
 
