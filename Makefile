@@ -240,6 +240,35 @@ reconcile-gnb-config: ## Force operator to regenerate gNB ConfigMaps after updat
 	@kubectl --kubeconfig=$(GNB_KUBECONFIG) get deployment -n $(GNB_NS) \
 		-l app.kubernetes.io/name=gnb 2>/dev/null || echo "  Deployments not ready yet"
 
+# create-gw1:
+# 	sudo docker exec regional-md-0-d55dw-lx5gd-sp69g sh -c "ip link add n6-gw link eth1.4 type macvlan mode bridge 2>/dev/null || true; ip addr add 10.0.1.254/8 dev n6-gw 2>/dev/null || true; ip link set n6-gw up"
+
+##@ N6 Test Interfaces (UPF-based)
+
+.PHONY: upf-iperf-setup
+upf-iperf-setup: ## Add secondary IPs and routes to UPF for iperf3 testing
+	KUBECONFIG=$(GNB_KUBECONFIG) kubectl exec -n free5gc-upf $$(KUBECONFIG=$(GNB_KUBECONFIG) kubectl get pod -n free5gc-upf -l name=upf-regional -o jsonpath='{.items[0].metadata.name}') -- \
+		sh -c "ip addr add 10.0.1.254/8 dev n6 2>/dev/null || true; ip addr add 10.0.1.253/8 dev n6 2>/dev/null || true; ip route add 10.0.2.0/24 dev upfgtp 2>/dev/null || true; ip route add 10.0.3.0/24 dev upfgtp 2>/dev/null || true"
+
+.PHONY: iperf-server-ue1
+iperf-server-ue1: ## Run iperf3 server on UPF listening on 10.0.1.254 (for UE1)
+	@UPF_CID=$$(sudo docker exec $(KIND_WORKER) crictl ps | grep upf-regional | awk '{print $$1}') && \
+	UPF_PID=$$(sudo docker exec $(KIND_WORKER) crictl inspect $$UPF_CID | grep '"pid":' | head -1 | tr -dc '0-9') && \
+	sudo docker exec -t $(KIND_WORKER) nsenter -t $$UPF_PID -n iperf3 -s -B 10.0.1.254
+
+.PHONY: iperf-server-ue2
+iperf-server-ue2: ## Run iperf3 server on UPF listening on 10.0.1.253 (for UE2)
+	@UPF_CID=$$(sudo docker exec $(KIND_WORKER) crictl ps | grep upf-regional | awk '{print $$1}') && \
+	UPF_PID=$$(sudo docker exec $(KIND_WORKER) crictl inspect $$UPF_CID | grep '"pid":' | head -1 | tr -dc '0-9') && \
+	sudo docker exec -t $(KIND_WORKER) nsenter -t $$UPF_PID -n iperf3 -s -B 10.0.1.253
+
+.PHONY: iperf-clean
+iperf-clean: ## Kill iperf3 server processes in Kind worker
+	@for PID in $$(sudo docker exec $(KIND_WORKER) ps aux | grep 'iperf3 -s' | grep -v grep | awk '{print $$2}'); do \
+		sudo docker exec $(KIND_WORKER) kill -9 $$PID 2>/dev/null || true; \
+	done
+	@echo "iperf3 processes cleaned"
+
 ##@ srsRAN gNB Scale
 
 .PHONY: gnb-down
