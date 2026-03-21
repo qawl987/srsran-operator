@@ -301,3 +301,31 @@ up-down: ## Scale down CU-CP, CU-UP, DU deployments to 0.
 	kubectl --kubeconfig=$(GNB_KUBECONFIG) scale deployment \
 		gnb-$(GNB_CLUSTER)-cuup \
 		--replicas=0 -n $(GNB_NS)
+
+##@ DU Slicing Configuration
+
+.PHONY: fix-du-slicing
+fix-du-slicing: ## Patch DU ConfigMap to add slicing config (eMBB + URLLC slices).
+	@# Operator template doesn't include slicing; patch ConfigMap directly.
+	@# Note: This patch is lost when operator recreates ConfigMap. Run after reconcile.
+	@echo "==> Patching DU ConfigMap with slicing configuration..."
+	@kubectl --kubeconfig=$(GNB_KUBECONFIG) get configmap gnb-$(GNB_CLUSTER)-du-config -n $(GNB_NS) -o yaml > /tmp/du-cm.yaml 2>/dev/null || \
+		{ echo "  Error: DU ConfigMap not found"; exit 1; }
+	@if grep -q "slicing:" /tmp/du-cm.yaml; then \
+		echo "  DU ConfigMap already has slicing config – nothing to patch."; \
+		rm -f /tmp/du-cm.yaml; \
+	else \
+		echo "  Adding slicing config (eMBB sd=66051/0x010203, URLLC sd=1122867/0x112233)..."; \
+		awk '/pusch:/{p=1} p && /mcs_table: qam64/{print; print "      slicing:"; print "        - # Slice 1: eMBB"; print "          sst: 1"; print "          sd: 66051"; print "          sched_cfg:"; print "            min_prb_policy_ratio: 0"; print "            max_prb_policy_ratio: 50"; print "            priority: 10"; print "        - # Slice 2: URLLC"; print "          sst: 1"; print "          sd: 1122867"; print "          sched_cfg:"; print "            min_prb_policy_ratio: 0"; print "            max_prb_policy_ratio: 100"; print "            priority: 200"; p=0; next} {print}' /tmp/du-cm.yaml > /tmp/du-cm-patched.yaml && mv /tmp/du-cm-patched.yaml /tmp/du-cm.yaml; \
+		kubectl --kubeconfig=$(GNB_KUBECONFIG) apply -f /tmp/du-cm.yaml; \
+		rm -f /tmp/du-cm.yaml; \
+		echo "  ✓ Patched DU ConfigMap. Restarting DU pod..."; \
+		kubectl --kubeconfig=$(GNB_KUBECONFIG) rollout restart deployment gnb-$(GNB_CLUSTER)-du -n $(GNB_NS); \
+		echo "  ✓ DU restart triggered. Wait ~30s then verify with: make verify-du-slicing"; \
+	fi
+
+.PHONY: verify-du-slicing
+verify-du-slicing: ## Verify DU ConfigMap has slicing configuration.
+	@echo "==> DU slicing configuration:"
+	@kubectl --kubeconfig=$(GNB_KUBECONFIG) get configmap gnb-$(GNB_CLUSTER)-du-config -n $(GNB_NS) \
+		-o jsonpath='{.data.gnb-config\.yml}' 2>/dev/null | grep -A 20 "slicing:" || echo "  No slicing config found in DU ConfigMap"
