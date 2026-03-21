@@ -321,21 +321,7 @@ update-git-slicing: ## Update regional.git with slicing config (eMBB + URLLC). O
 	else \
 		echo "  Adding slicing to srscellconfig.yaml..."; \
 		sed -i '/slicing:/d' $$CELL_CFG 2>/dev/null || true; \
-		cat >> $$CELL_CFG << 'SLICING_EOF'
-  slicing:
-    - sst: 1
-      sd: 66051
-      schedCfg:
-        minPrbPolicyRatio: 0
-        maxPrbPolicyRatio: 50
-        priority: 10
-    - sst: 1
-      sd: 1122867
-      schedCfg:
-        minPrbPolicyRatio: 0
-        maxPrbPolicyRatio: 100
-        priority: 200
-SLICING_EOF
+		printf '  slicing:\n    - sst: 1\n      sd: 66051\n      schedCfg:\n        minPrbPolicyRatio: 0\n        maxPrbPolicyRatio: 50\n        priority: 10\n    - sst: 1\n      sd: 1122867\n      schedCfg:\n        minPrbPolicyRatio: 0\n        maxPrbPolicyRatio: 100\n        priority: 200\n' >> $$CELL_CFG; \
 	fi; \
 	if [ -f $$NF_CFG ]; then \
 		if grep -q "slicing:" $$NF_CFG; then \
