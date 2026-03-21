@@ -304,8 +304,74 @@ up-down: ## Scale down CU-CP, CU-UP, DU deployments to 0.
 
 ##@ DU Slicing Configuration
 
+.PHONY: update-git-slicing
+update-git-slicing: ## Update regional.git with slicing config (eMBB + URLLC). Operator will pick it up.
+	@# Updates srscellconfig.yaml and nfconfig.yaml in regional.git to include slicing.
+	@# After ConfigSync applies, delete ConfigMaps to force operator reconcile.
+	@echo "==> Updating regional.git with slicing configuration..."
+	@REPO_DIR=$$(mktemp -d); \
+	git clone $(GITEA_BASE) $$REPO_DIR --depth=1 -q; \
+	cd $$REPO_DIR; \
+	git config user.email "nephio@nephio.org"; \
+	git config user.name "Nephio"; \
+	CELL_CFG="srsran-gnb/srscellconfig.yaml"; \
+	NF_CFG="srsran-gnb/nfconfig.yaml"; \
+	if grep -q "^  slicing:" $$CELL_CFG 2>/dev/null; then \
+		echo "  srscellconfig.yaml already has slicing config."; \
+	else \
+		echo "  Adding slicing to srscellconfig.yaml..."; \
+		sed -i '/slicing:/d' $$CELL_CFG 2>/dev/null || true; \
+		cat >> $$CELL_CFG << 'SLICING_EOF'
+  slicing:
+    - sst: 1
+      sd: 66051
+      schedCfg:
+        minPrbPolicyRatio: 0
+        maxPrbPolicyRatio: 50
+        priority: 10
+    - sst: 1
+      sd: 1122867
+      schedCfg:
+        minPrbPolicyRatio: 0
+        maxPrbPolicyRatio: 100
+        priority: 200
+SLICING_EOF
+	fi; \
+	if [ -f $$NF_CFG ]; then \
+		if grep -q "slicing:" $$NF_CFG; then \
+			echo "  nfconfig.yaml already has slicing config."; \
+		else \
+			echo "  Adding slicing to nfconfig.yaml (embedded SrsRANCellConfig)..."; \
+			sed -i '/puschMcsTable: qam64/a\      slicing:\n        - sst: 1\n          sd: 66051\n          schedCfg:\n            minPrbPolicyRatio: 0\n            maxPrbPolicyRatio: 50\n            priority: 10\n        - sst: 1\n          sd: 1122867\n          schedCfg:\n            minPrbPolicyRatio: 0\n            maxPrbPolicyRatio: 100\n            priority: 200' $$NF_CFG; \
+		fi; \
+	fi; \
+	if git diff --quiet; then \
+		echo "  regional.git already has slicing config – nothing to commit."; \
+	else \
+		echo "  Changed:"; \
+		git diff --no-color | head -60; \
+		git add -A; \
+		git commit -m "feat: add network slicing config (eMBB sd=66051, URLLC sd=1122867)"; \
+		git push -q && echo "  ✓ Pushed slicing config to regional.git"; \
+	fi; \
+	rm -rf $$REPO_DIR
+	@echo "==> Waiting 30s for ConfigSync to apply changes..."
+	@sleep 30
+	@echo "==> Forcing operator to regenerate gNB ConfigMaps..."
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) delete configmap \
+		gnb-$(GNB_CLUSTER)-du-config \
+		-n $(GNB_NS) --ignore-not-found
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) annotate nfdeployment \
+		gnb-$(GNB_CLUSTER) -n $(GNB_NS) \
+		config-update="$$(date +%s)" --overwrite
+	@echo "==> Waiting 20s for operator to recreate DU ConfigMap..."
+	@sleep 20
+	@echo "==> Verifying slicing in DU ConfigMap:"
+	@kubectl --kubeconfig=$(GNB_KUBECONFIG) get configmap gnb-$(GNB_CLUSTER)-du-config -n $(GNB_NS) \
+		-o jsonpath='{.data.gnb-config\.yml}' 2>/dev/null | grep -A 15 "slicing:" || echo "  Slicing not found yet - operator may still be reconciling"
+
 .PHONY: fix-du-slicing
-fix-du-slicing: ## Patch DU ConfigMap to add slicing config (eMBB + URLLC slices).
+fix-du-slicing: ## [DEPRECATED] Patch DU ConfigMap directly. Use update-git-slicing instead.
 	@# Operator template doesn't include slicing; patch ConfigMap directly.
 	@# Note: This patch is lost when operator recreates ConfigMap. Run after reconcile.
 	@echo "==> Patching DU ConfigMap with slicing configuration..."

@@ -62,6 +62,10 @@ type SrsRANCellConfigSpec struct {
 	// +kubebuilder:validation:Enum=qam64;qam256
 	// +kubebuilder:default=qam64
 	PUSCHMcsTable string `json:"puschMcsTable,omitempty"`
+
+	// Slicing configuration. Defines network slices and their resource allocation.
+	// +optional
+	Slicing []SrsRANSliceConfig `json:"slicing,omitempty"`
 }
 
 // SrsRANPDCCHConfig holds PDCCH (Physical Downlink Control Channel) parameters.
@@ -91,6 +95,44 @@ type SrsRANPRACHConfig struct {
 	// Matches prach.prach_config_index in srsRAN config.
 	// +kubebuilder:default=1
 	PrachConfigIndex uint32 `json:"prachConfigIndex,omitempty"`
+}
+
+// SrsRANSliceSchedConfig holds scheduler configuration for a slice.
+type SrsRANSliceSchedConfig struct {
+	// Minimum PRB policy ratio (0-100). Guarantees minimum resource allocation.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:default=0
+	MinPrbPolicyRatio uint32 `json:"minPrbPolicyRatio"`
+
+	// Maximum PRB policy ratio (0-100). Caps resource allocation.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:default=100
+	MaxPrbPolicyRatio uint32 `json:"maxPrbPolicyRatio"`
+
+	// Scheduler priority (0-255). Higher value = higher priority.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=255
+	// +kubebuilder:default=10
+	Priority uint32 `json:"priority"`
+}
+
+// SrsRANSliceConfig defines a network slice configuration.
+type SrsRANSliceConfig struct {
+	// Slice/Service Type (SST). 1=eMBB, 2=URLLC, 3=MIoT.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=255
+	SST uint32 `json:"sst"`
+
+	// Slice Differentiator (SD) in decimal. e.g. 66051 = 0x010203.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=16777215
+	SD uint32 `json:"sd"`
+
+	// Scheduler configuration for this slice.
+	// +optional
+	SchedCfg SrsRANSliceSchedConfig `json:"schedCfg,omitempty"`
 }
 
 // SrsRANCellConfigStatus is the observed state of SrsRANCellConfig.

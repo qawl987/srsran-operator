@@ -261,6 +261,7 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 		PRACH:               cellCfg.Spec.PRACH,
 		PDSCHMcsTable:       mcsTableOrDefault(cellCfg.Spec.PDSCHMcsTable),
 		PUSCHMcsTable:       mcsTableOrDefault(cellCfg.Spec.PUSCHMcsTable),
+		Slicing:             cellCfg.Spec.Slicing,
 	})
 	if err != nil {
 		log.Error(err, "Failed to render DU config template")

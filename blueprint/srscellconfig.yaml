@@ -18,3 +18,16 @@ spec:
     prachConfigIndex: 1
   pdschMcsTable: qam64
   puschMcsTable: qam64
+  slicing:
+    - sst: 1
+      sd: 66051  # 0x010203 - eMBB slice
+      schedCfg:
+        minPrbPolicyRatio: 0
+        maxPrbPolicyRatio: 50
+        priority: 10
+    - sst: 1
+      sd: 1122867  # 0x112233 - URLLC slice
+      schedCfg:
+        minPrbPolicyRatio: 0
+        maxPrbPolicyRatio: 100
+        priority: 200
