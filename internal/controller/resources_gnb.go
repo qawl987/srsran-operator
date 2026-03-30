@@ -24,7 +24,6 @@ limitations under the License.
 package controller
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 
@@ -35,8 +34,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
-
-	srsranov1alpha1 "workload.nephio.org/srsran_operator/api/v1alpha1"
 )
 
 const (
@@ -160,22 +157,10 @@ func (g GnbResources) GetConfigMap(log logr.Logger, nfDeploy *workloadv1alpha1.N
 		return nil
 	}
 
-	// ── Unmarshal operator-specific CRDs from configInfo ────────────────────
-	cellCfg := &srsranov1alpha1.SrsRANCellConfig{}
-	if err := json.Unmarshal(configInfo.ConfigSelfInfo["SrsRANCellConfig"].Raw, cellCfg); err != nil {
-		log.Error(err, "Cannot unmarshal SrsRANCellConfig")
-		return nil
-	}
-	plmnCfg := &srsranov1alpha1.PLMNConfig{}
-	if err := json.Unmarshal(configInfo.ConfigSelfInfo["PLMNConfig"].Raw, plmnCfg); err != nil {
-		log.Error(err, "Cannot unmarshal PLMNConfig")
-		return nil
-	}
-	srsranCfg := &srsranov1alpha1.SrsRANConfig{}
-	if err := json.Unmarshal(configInfo.ConfigSelfInfo["SrsRANConfig"].Raw, srsranCfg); err != nil {
-		log.Error(err, "Cannot unmarshal SrsRANConfig")
-		return nil
-	}
+	// ── Use config CRs directly from configInfo ─────────────────────────────
+	cellCfg := configInfo.CellConfig
+	plmnCfg := configInfo.PLMNConfig
+	srsranCfg := configInfo.SrsRANConfig
 
 	// ── Resolve AMF address ──────────────────────────────────────────────────
 	// Prefer explicit field; fall back to a statically-known value.
@@ -350,11 +335,7 @@ func (g GnbResources) duNADAnnotation(name string, spec *workloadv1alpha1.NFDepl
 // GetDeployment generates the three Deployments: CU-CP, CU-UP, DU
 // (and optionally RadioBreaker when UECount > 1).
 func (g GnbResources) GetDeployment(log logr.Logger, nfDeploy *workloadv1alpha1.NFDeployment, configInfo *ConfigInfo) []*appsv1.Deployment {
-	srsranCfg := &srsranov1alpha1.SrsRANConfig{}
-	if err := json.Unmarshal(configInfo.ConfigSelfInfo["SrsRANConfig"].Raw, srsranCfg); err != nil {
-		log.Error(err, "Cannot unmarshal SrsRANConfig for Deployment")
-		return nil
-	}
+	srsranCfg := configInfo.SrsRANConfig
 
 	cucpNAD, err := g.cucpNADAnnotation(nfDeploy.Name, &nfDeploy.Spec)
 	if err != nil {

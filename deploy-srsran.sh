@@ -334,7 +334,7 @@ rules:
   resources: ["configmaps","serviceaccounts","services","pods","events"]
   verbs: ["get","list","watch","create","update","patch","delete"]
 - apiGroups: ["workload.nephio.org"]
-  resources: ["srscellconfigs","plmnconfigs","srsranconfigs"]
+  resources: ["srsrancellconfigs","plmnconfigs","srsranconfigs"]
   verbs: ["get","list","watch"]
 - apiGroups: ["k8s.cni.cncf.io"]
   resources: ["network-attachment-definitions"]

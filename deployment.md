@@ -309,7 +309,7 @@ rules:
   resources: ["configmaps","serviceaccounts","services","pods","events"]
   verbs: ["get","list","watch","create","update","patch","delete"]
 - apiGroups: ["workload.nephio.org"]
-  resources: ["srscellconfigs","plmnconfigs","srsranconfigs"]
+  resources: ["srsrancellconfigs","plmnconfigs","srsranconfigs"]
   verbs: ["get","list","watch"]
 - apiGroups: ["k8s.cni.cncf.io"]
   resources: ["network-attachment-definitions"]
@@ -482,7 +482,7 @@ kubectl --kubeconfig="${KUBECONFIG}" delete namespace "${OPERATOR_NS}" 2>/dev/nu
 # 4. 刪 CRDs（若要完全重置）
 kubectl --kubeconfig="${KUBECONFIG}" delete crd \
   srsranconfigs.workload.nephio.org \
-  srscellconfigs.workload.nephio.org \
+  srsrancellconfigs.workload.nephio.org \
   plmnconfigs.workload.nephio.org 2>/dev/null || true
 
 # 5. 重新走 Phase 1 ~ Phase 6

@@ -34,6 +34,7 @@ import (
 
 	workloadv1alpha1 "github.com/nephio-project/api/workload/v1alpha1"
 
+	srsranov1alpha1 "workload.nephio.org/srsran_operator/api/v1alpha1"
 	"workload.nephio.org/srsran_operator/internal/controller"
 	//+kubebuilder:scaffold:imports
 )
@@ -45,6 +46,8 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	// Register srsran-operator CRDs (SrsRANCellConfig, PLMNConfig, SrsRANConfig)
+	utilruntime.Must(srsranov1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 

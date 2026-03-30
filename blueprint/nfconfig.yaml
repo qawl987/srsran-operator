@@ -9,50 +9,11 @@ spec:
     kind: SrsRANCellConfig
     metadata:
       name: gnb-cell-config
-      namespace: example
-    spec:
-      dlArfcn: 368500
-      band: 3
-      channelBandwidthMHz: 20
-      commonScs: 15
-      pci: 1
-      pdcch:
-        ss0Index: 0
-        coreset0Index: 12
-        ss2Type: common
-        dciFormat01and11: false
-      prach:
-        prachConfigIndex: 1
-      pdschMcsTable: qam64
-      puschMcsTable: qam64
   - apiVersion: workload.nephio.org/v1alpha1
     kind: PLMNConfig
     metadata:
       name: gnb-plmn
-      namespace: example
-    spec:
-      plmn: "20893"
-      tac: 1
-      slices:
-      - sst: 1
-        sd: "010203"
   - apiVersion: workload.nephio.org/v1alpha1
     kind: SrsRANConfig
     metadata:
       name: gnb-srsran-config
-      namespace: example
-    spec:
-      cucpImage: "docker.io/qawl987/srsran-split:latest"
-      cuupImage: "docker.io/qawl987/srsran-split:latest"
-      duImage: "docker.io/qawl987/srsran-split:latest"
-      ueImage: "docker.io/qawl987/srsran-split:latest"
-      radioBreakerImage: "docker.io/qawl987/srsran-split:latest"
-      zmqMode: true
-      srate: "23.04"
-      txGain: 75
-      rxGain: 75
-      ueCount: 1
-      sliceIntent:
-        type: eMBB
-        fiveQI: 9
-      amfAddr: "172.2.0.254"

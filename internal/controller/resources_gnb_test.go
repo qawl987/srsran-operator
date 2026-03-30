@@ -17,7 +17,6 @@ limitations under the License.
 package controller
 
 import (
-	"encoding/json"
 	"testing"
 
 	workloadv1alpha1 "github.com/nephio-project/api/workload/v1alpha1"
@@ -25,7 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"github.com/go-logr/logr"
 
 	srsranov1alpha1 "workload.nephio.org/srsran_operator/api/v1alpha1"
@@ -55,13 +53,8 @@ func makeTestNFDeployment() *workloadv1alpha1.NFDeployment {
 // makeTestConfigInfo builds a ConfigInfo with all three mandatory CRD kinds.
 func makeTestConfigInfo(t *testing.T) *ConfigInfo {
 	t.Helper()
-	cellCfg := struct {
-		APIVersion string                              `json:"apiVersion"`
-		Kind       string                              `json:"kind"`
-		Spec       srsranov1alpha1.SrsRANCellConfigSpec `json:"spec"`
-	}{
-		APIVersion: "workload.nephio.org/v1alpha1",
-		Kind:       "SrsRANCellConfig",
+	ci := NewConfigInfo()
+	ci.CellConfig = &srsranov1alpha1.SrsRANCellConfig{
 		Spec: srsranov1alpha1.SrsRANCellConfigSpec{
 			DlArfcn:             368500,
 			Band:                3,
@@ -76,13 +69,7 @@ func makeTestConfigInfo(t *testing.T) *ConfigInfo {
 			PUSCHMcsTable: "qam64",
 		},
 	}
-	plmnCfg := struct {
-		APIVersion string                         `json:"apiVersion"`
-		Kind       string                         `json:"kind"`
-		Spec       srsranov1alpha1.PLMNConfigSpec  `json:"spec"`
-	}{
-		APIVersion: "workload.nephio.org/v1alpha1",
-		Kind:       "PLMNConfig",
+	ci.PLMNConfig = &srsranov1alpha1.PLMNConfig{
 		Spec: srsranov1alpha1.PLMNConfigSpec{
 			PLMN: "20893",
 			TAC:  1,
@@ -91,13 +78,7 @@ func makeTestConfigInfo(t *testing.T) *ConfigInfo {
 			},
 		},
 	}
-	srsranCfg := struct {
-		APIVersion string                          `json:"apiVersion"`
-		Kind       string                          `json:"kind"`
-		Spec       srsranov1alpha1.SrsRANConfigSpec `json:"spec"`
-	}{
-		APIVersion: "workload.nephio.org/v1alpha1",
-		Kind:       "SrsRANConfig",
+	ci.SrsRANConfig = &srsranov1alpha1.SrsRANConfig{
 		Spec: srsranov1alpha1.SrsRANConfigSpec{
 			CUCPImage: "docker.io/qawl987/srsran-split:latest",
 			CUUPImage: "docker.io/qawl987/srsran-split:latest",
@@ -114,17 +95,6 @@ func makeTestConfigInfo(t *testing.T) *ConfigInfo {
 			},
 		},
 	}
-
-	marshalRaw := func(v any) runtime.RawExtension {
-		b, err := json.Marshal(v)
-		require.NoError(t, err)
-		return runtime.RawExtension{Raw: b}
-	}
-
-	ci := NewConfigInfo()
-	ci.ConfigSelfInfo["SrsRANCellConfig"] = marshalRaw(cellCfg)
-	ci.ConfigSelfInfo["PLMNConfig"] = marshalRaw(plmnCfg)
-	ci.ConfigSelfInfo["SrsRANConfig"] = marshalRaw(srsranCfg)
 	return ci
 }
 
@@ -213,14 +183,14 @@ func TestGetServiceForNFDeploymentReturnsServices(t *testing.T) {
 	assert.Len(t, svcs, 4, "expected 4 ClusterIP services")
 }
 
-func TestCheckMandatoryKindsAllPresent(t *testing.T) {
+func TestConfigInfoIsCompleteAllPresent(t *testing.T) {
 	ci := makeTestConfigInfo(t)
-	assert.True(t, CheckMandatoryKinds(ci.ConfigSelfInfo))
+	assert.True(t, ci.IsComplete())
 }
 
-func TestCheckMandatoryKindsMissing(t *testing.T) {
+func TestConfigInfoIsCompleteMissing(t *testing.T) {
 	ci := NewConfigInfo()
-	ci.ConfigSelfInfo["SrsRANCellConfig"] = runtime.RawExtension{Raw: []byte(`{}`)}
+	ci.CellConfig = &srsranov1alpha1.SrsRANCellConfig{}
 	// PLMNConfig and SrsRANConfig missing
-	assert.False(t, CheckMandatoryKinds(ci.ConfigSelfInfo))
+	assert.False(t, ci.IsComplete())
 }

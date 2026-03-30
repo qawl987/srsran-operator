@@ -42,9 +42,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	workloadv1alpha1 "github.com/nephio-project/api/workload/v1alpha1"
+	srsranov1alpha1 "workload.nephio.org/srsran_operator/api/v1alpha1"
 )
 
 // GetSupportedProviders returns the list of NFDeployment provider strings
@@ -193,8 +196,8 @@ func (r *RANDeploymentReconciler) DeleteAll(ctx context.Context, nfDeploy *workl
 	return errs
 }
 
-// GetConfigs reads NFDeployment.spec.parametersRefs → NFConfig.spec.configRefs
-// and builds a ConfigInfo with ConfigSelfInfo keyed by kind name.
+// GetConfigs reads NFDeployment.spec.parametersRefs → NFConfig.spec.configRefs (ObjectReferences)
+// and fetches the actual CR objects from the cluster.
 func (r *RANDeploymentReconciler) GetConfigs(ctx context.Context, nfDeploy *workloadv1alpha1.NFDeployment) (*ConfigInfo, error) {
 	logger := log.FromContext(ctx).WithValues("NFDeployment", types.NamespacedName{Namespace: nfDeploy.Namespace, Name: nfDeploy.Name})
 	configInfo := NewConfigInfo()
@@ -213,24 +216,61 @@ func (r *RANDeploymentReconciler) GetConfigs(ctx context.Context, nfDeploy *work
 				return configInfo, err
 			}
 			logger.Info("Got NFConfig", "name", nfConfig.Name, "configRefs", len(nfConfig.Spec.ConfigRefs))
+
+			// Parse each configRef as ObjectReference and fetch the actual CR
 			for _, rawRef := range nfConfig.Spec.ConfigRefs {
 				kind, err := extractKindFromRaw(runtime.RawExtension{Raw: rawRef.Raw})
 				if err != nil {
 					logger.Error(err, "Cannot extract kind from configRef")
 					return configInfo, err
 				}
-				logger.Info("Indexed configRef", "kind", kind)
-				configInfo.ConfigSelfInfo[kind] = runtime.RawExtension{Raw: rawRef.Raw}
-			}
-			if !CheckMandatoryKinds(configInfo.ConfigSelfInfo) {
-				missing := []string{}
-				for _, k := range GetMandatoryNfKinds() {
-					if _, ok := configInfo.ConfigSelfInfo[k]; !ok {
-						missing = append(missing, k)
-					}
+				name, err := extractNameFromRaw(runtime.RawExtension{Raw: rawRef.Raw})
+				if err != nil {
+					logger.Error(err, "Cannot extract name from configRef")
+					return configInfo, err
 				}
-				err := fmt.Errorf("mandatory configRef kinds not found: %v", missing)
-				logger.Error(err, "NFConfig missing mandatory kinds")
+				logger.Info("Fetching config CR", "kind", kind, "name", name)
+
+				switch kind {
+				case "SrsRANCellConfig":
+					cellCfg := &srsranov1alpha1.SrsRANCellConfig{}
+					if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: nfDeploy.Namespace}, cellCfg); err != nil {
+						logger.Error(err, "Failed to get SrsRANCellConfig", "name", name)
+						return configInfo, err
+					}
+					configInfo.CellConfig = cellCfg
+				case "PLMNConfig":
+					plmnCfg := &srsranov1alpha1.PLMNConfig{}
+					if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: nfDeploy.Namespace}, plmnCfg); err != nil {
+						logger.Error(err, "Failed to get PLMNConfig", "name", name)
+						return configInfo, err
+					}
+					configInfo.PLMNConfig = plmnCfg
+				case "SrsRANConfig":
+					srsranCfg := &srsranov1alpha1.SrsRANConfig{}
+					if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: nfDeploy.Namespace}, srsranCfg); err != nil {
+						logger.Error(err, "Failed to get SrsRANConfig", "name", name)
+						return configInfo, err
+					}
+					configInfo.SrsRANConfig = srsranCfg
+				default:
+					logger.Info("Skipping unknown configRef kind", "kind", kind)
+				}
+			}
+
+			if !configInfo.IsComplete() {
+				missing := []string{}
+				if configInfo.CellConfig == nil {
+					missing = append(missing, "SrsRANCellConfig")
+				}
+				if configInfo.PLMNConfig == nil {
+					missing = append(missing, "PLMNConfig")
+				}
+				if configInfo.SrsRANConfig == nil {
+					missing = append(missing, "SrsRANConfig")
+				}
+				err := fmt.Errorf("mandatory config CRs not found: %v", missing)
+				logger.Error(err, "NFConfig missing mandatory config references")
 				return configInfo, err
 			}
 		default:
@@ -394,10 +434,63 @@ func (r *RANDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	return ctrl.Result{}, nil
 }
 
+// findNFDeploymentsForConfig returns reconcile requests for all NFDeployments
+// that reference the changed config CR via NFConfig.
+func (r *RANDeploymentReconciler) findNFDeploymentsForConfig(ctx context.Context, obj client.Object) []reconcile.Request {
+	logger := log.FromContext(ctx).WithValues("configKind", obj.GetObjectKind().GroupVersionKind().Kind, "configName", obj.GetName())
+
+	// List all NFDeployments in the same namespace
+	nfDeployList := &workloadv1alpha1.NFDeploymentList{}
+	if err := r.List(ctx, nfDeployList, client.InNamespace(obj.GetNamespace())); err != nil {
+		logger.Error(err, "Failed to list NFDeployments")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, nfDeploy := range nfDeployList.Items {
+		// Only process NFDeployments with supported providers
+		if !slices.Contains(GetSupportedProviders(), nfDeploy.Spec.Provider) {
+			continue
+		}
+
+		// Check if this NFDeployment references an NFConfig that references the changed config
+		for _, ref := range nfDeploy.Spec.ParametersRefs {
+			if ref.APIVersion == "workload.nephio.org/v1alpha1" && ref.Kind == "NFConfig" && ref.Name != nil {
+				nfConfig := &workloadv1alpha1.NFConfig{}
+				if err := r.Get(ctx, types.NamespacedName{Name: *ref.Name, Namespace: nfDeploy.Namespace}, nfConfig); err != nil {
+					continue
+				}
+				// Check if this NFConfig references the changed config CR
+				for _, configRef := range nfConfig.Spec.ConfigRefs {
+					kind, _ := extractKindFromRaw(runtime.RawExtension{Raw: configRef.Raw})
+					name, _ := extractNameFromRaw(runtime.RawExtension{Raw: configRef.Raw})
+					if kind == obj.GetObjectKind().GroupVersionKind().Kind && name == obj.GetName() {
+						logger.Info("Enqueueing NFDeployment for config change", "nfDeployment", nfDeploy.Name)
+						requests = append(requests, reconcile.Request{
+							NamespacedName: types.NamespacedName{
+								Name:      nfDeploy.Name,
+								Namespace: nfDeploy.Namespace,
+							},
+						})
+						break
+					}
+				}
+			}
+		}
+	}
+	return requests
+}
+
 // SetupWithManager registers the controller with the Manager.
 func (r *RANDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&workloadv1alpha1.NFDeployment{}).
+		Watches(&srsranov1alpha1.SrsRANCellConfig{},
+			handler.EnqueueRequestsFromMapFunc(r.findNFDeploymentsForConfig)).
+		Watches(&srsranov1alpha1.PLMNConfig{},
+			handler.EnqueueRequestsFromMapFunc(r.findNFDeploymentsForConfig)).
+		Watches(&srsranov1alpha1.SrsRANConfig{},
+			handler.EnqueueRequestsFromMapFunc(r.findNFDeploymentsForConfig)).
 		Complete(r)
 }
 
