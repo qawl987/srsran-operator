@@ -300,10 +300,12 @@ func (r *RANDeploymentReconciler) updateStatusIfRequired(ctx context.Context, nf
 // +kubebuilder:rbac:groups=workload.nephio.org,resources=nfdeployments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=workload.nephio.org,resources=nfdeployments/finalizers,verbs=update
 // +kubebuilder:rbac:groups=workload.nephio.org,resources=nfconfigs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=workload.nephio.org,resources=srsrancellconfigs;plmnconfigs;srsranconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps;serviceaccounts;services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=k8s.cni.cncf.io,resources=network-attachment-definitions,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is the main control loop.
 func (r *RANDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

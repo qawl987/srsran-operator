@@ -6,6 +6,13 @@ IMG ?= docker.io/nephio/srsran-operator:latest
 CONTROLLER_GEN ?= $(shell which controller-gen 2>/dev/null || echo go run sigs.k8s.io/controller-tools/cmd/controller-gen@latest)
 ENVTEST ?= $(shell which setup-envtest 2>/dev/null || echo go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest)
 
+# Configurable variables – override on command line if needed.
+KIND_WORKER    ?= regional-md-0-7hcxb-z4qv6-q6r67
+OPERATOR_NS    ?= srsran
+GNB_KUBECONFIG ?= /home/free5gc/regional.kubeconfig
+GNB_NS         ?= srsran-gnb
+GNB_CLUSTER    ?= regional
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 GOBIN=$(shell go env GOBIN)
 ifeq ($(GOBIN),)
@@ -28,7 +35,8 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: ## Generate ClusterRole RBAC manifests.
+manifests: ## Generate CRD and ClusterRole RBAC manifests.
+	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
 	$(CONTROLLER_GEN) rbac:roleName=srsran-operator-role paths="./..." output:rbac:artifacts:config=config/rbac
 
 .PHONY: generate
@@ -76,17 +84,17 @@ ifndef ignore-not-found
 endif
 
 .PHONY: install
-install: manifests ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	kubectl apply -f config/crd/bases/
+install: manifests ## Install CRDs into the workload cluster.
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) apply -f config/crd/bases/
 
 .PHONY: uninstall
-uninstall: manifests ## Uninstall CRDs from the K8s cluster.
-	kubectl delete --ignore-not-found=$(ignore-not-found) -f config/crd/bases/
+uninstall: manifests ## Uninstall CRDs from the workload cluster.
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) delete --ignore-not-found=$(ignore-not-found) -f config/crd/bases/
 
 .PHONY: deploy
-deploy: manifests ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	kubectl apply -f config/rbac/
-	kubectl apply -f config/manager/
+deploy: manifests ## Deploy controller to the workload cluster.
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) apply -f config/rbac/
+	kubectl --kubeconfig=$(GNB_KUBECONFIG) apply -f config/manager/
 
 .PHONY: undeploy
 undeploy: ## Undeploy controller from the K8s cluster.
@@ -94,13 +102,6 @@ undeploy: ## Undeploy controller from the K8s cluster.
 	kubectl delete --ignore-not-found=$(ignore-not-found) -f config/manager/
 
 ##@ Kind Redeploy
-
-# Configurable variables – override on command line if needed.
-KIND_WORKER    ?= regional-md-0-7hcxb-z4qv6-q6r67
-OPERATOR_NS    ?= srsran
-GNB_KUBECONFIG ?= /home/free5gc/regional.kubeconfig
-GNB_NS         ?= srsran-gnb
-GNB_CLUSTER    ?= regional
 
 .PHONY: build-linux
 build-linux: ## Build the manager binary for linux/amd64 (no CGO).

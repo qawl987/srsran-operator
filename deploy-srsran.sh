@@ -285,106 +285,22 @@ fi
 echo ""
 echo "=== Step 6: Deploy srsran-operator to workload cluster ==="
 
-TMPMANIFEST="/tmp/srsran-operator-manifests"
-mkdir -p "${TMPMANIFEST}"
-
-# Generate CRDs using controller-gen (requires Go)
-if command -v controller-gen &>/dev/null || go run sigs.k8s.io/controller-tools/cmd/controller-gen@latest --help &>/dev/null 2>&1; then
-    info "Generating CRD manifests..."
-    cd "${SCRIPT_DIR}"
-    CONTROLLER_GEN="${CONTROLLER_GEN:-$(command -v controller-gen 2>/dev/null || echo "go run sigs.k8s.io/controller-tools/cmd/controller-gen@latest")}"
-    ${CONTROLLER_GEN} crd \
-        paths="./api/..." \
-        output:crd:artifacts:config="${TMPMANIFEST}" 2>/dev/null \
-        || warn "CRD generation failed – skipping CRD apply"
-    cd - >/dev/null
-
-    # Apply CRDs to workload cluster
-    if ls "${TMPMANIFEST}"/*.yaml &>/dev/null; then
-        ${WKCTL} apply -f "${TMPMANIFEST}/"
-        ok "CRDs applied to workload cluster"
-    fi
-fi
-
 # Create namespace on workload cluster
 ${WKCTL} create namespace "${OPERATOR_NS}" 2>/dev/null \
     || info "Namespace ${OPERATOR_NS} already exists"
 
-# Generate RBAC and operator Deployment manifest inline
-cat > "${TMPMANIFEST}/srsran-operator-deploy.yaml" <<EOF
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: srsran-operator
-  namespace: ${OPERATOR_NS}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: srsran-operator
-rules:
-- apiGroups: ["workload.nephio.org"]
-  resources: ["nfdeployments", "nfdeployments/status", "nfdeployments/finalizers", "nfconfigs"]
-  verbs: ["get","list","watch","create","update","patch","delete"]
-- apiGroups: ["apps"]
-  resources: ["deployments"]
-  verbs: ["get","list","watch","create","update","patch","delete"]
-- apiGroups: [""]
-  resources: ["configmaps","serviceaccounts","services","pods","events"]
-  verbs: ["get","list","watch","create","update","patch","delete"]
-- apiGroups: ["workload.nephio.org"]
-  resources: ["srsrancellconfigs","plmnconfigs","srsranconfigs"]
-  verbs: ["get","list","watch"]
-- apiGroups: ["k8s.cni.cncf.io"]
-  resources: ["network-attachment-definitions"]
-  verbs: ["get","list","watch","create","update","patch","delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: srsran-operator
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: srsran-operator
-subjects:
-- kind: ServiceAccount
-  name: srsran-operator
-  namespace: ${OPERATOR_NS}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: srsran-operator
-  namespace: ${OPERATOR_NS}
-  labels:
-    app: srsran-operator
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: srsran-operator
-  template:
-    metadata:
-      labels:
-        app: srsran-operator
-    spec:
-      serviceAccountName: srsran-operator
-      containers:
-      - name: operator
-        image: ${IMG}
-        imagePullPolicy: IfNotPresent
-        command: ["/manager"]
-        env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-EOF
+# Generate and install CRDs, RBAC, and operator using make
+info "Generating and installing CRDs..."
+cd "${SCRIPT_DIR}"
+make install \
+    || warn "CRD installation failed – skipping CRD apply"
+ok "CRDs applied to workload cluster"
 
-${WKCTL} apply -f "${TMPMANIFEST}/srsran-operator-deploy.yaml"
+info "Deploying RBAC and operator..."
+make deploy \
+    || warn "Operator deployment failed"
 ok "srsran-operator deployed to workload cluster"
+cd - >/dev/null
 
 # Wait for operator to be ready
 info "Waiting up to 2 min for srsran-operator to be Available..."

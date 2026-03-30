@@ -1,0 +1,158 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: srsranconfigs.workload.nephio.org
+spec:
+  group: workload.nephio.org
+  names:
+    kind: SrsRANConfig
+    listKind: SrsRANConfigList
+    plural: srsranconfigs
+    shortNames:
+    - srsconf
+    singular: srsranconfig
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SrsRANConfig is the Schema for the srsRAN deployment configuration CRD.
+          It carries container images, ZMQ RF simulation parameters, UE count and
+          slice intent for the srsRAN CU-CP / CU-UP / DU deployment.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SrsRANConfigSpec defines the deployment configuration for srsRAN:
+              container images, ZMQ RF simulation parameters, UE count and slice intent.
+            properties:
+              amfAddr:
+                description: |-
+                  AmfAddr is the AMF NGAP address (IP or DNS) for the CU-CP.
+                  When empty the controller attempts to resolve it from a Dependency configRef.
+                type: string
+              cucpImage:
+                default: docker.io/qawl987/srsran-split:latest
+                description: CUCPImage is the container image for the srsRAN CU-CP
+                  process.
+                type: string
+              cuupImage:
+                default: docker.io/qawl987/srsran-split:latest
+                description: CUUPImage is the container image for the srsRAN CU-UP
+                  process.
+                type: string
+              duImage:
+                default: docker.io/qawl987/srsran-split:latest
+                description: DUImage is the container image for the srsRAN DU process.
+                type: string
+              radioBreakerImage:
+                default: docker.io/qawl987/srsran-split:latest
+                description: |-
+                  RadioBreakerImage is the ZMQ proxy image used for multi-UE topology.
+                  Only used when ZMQMode is true and UECount > 1.
+                type: string
+              rxGain:
+                default: 75
+                description: |-
+                  RxGain is the RF receive gain. Only used when ZMQMode is true.
+                  Matches ru_sdr.rx_gain in srsRAN config.
+                format: int32
+                type: integer
+              sliceIntent:
+                description: SliceIntent defines the 5G QoS slice intent for the RAN.
+                properties:
+                  fiveQI:
+                    default: 9
+                    description: |-
+                      FiveQI is the 5G QoS Identifier.
+                      eMBB valid values: 7, 9, 10. URLLC valid values: 82, 84, 85.
+                    maximum: 255
+                    minimum: 1
+                    type: integer
+                  maxLatencyMs:
+                    description: MaxLatencyMs is the target per-packet end-to-end
+                      latency budget (e.g. "10ms").
+                    type: string
+                  type:
+                    allOf:
+                    - enum:
+                      - eMBB
+                      - URLLC
+                    - enum:
+                      - eMBB
+                      - URLLC
+                    default: eMBB
+                    description: 'Type is the slice category: eMBB or URLLC.'
+                    type: string
+                required:
+                - fiveQI
+                - type
+                type: object
+              srate:
+                default: "23.04"
+                description: |-
+                  SRate is the RF sample rate in MHz. Only used when ZMQMode is true.
+                  Matches ru_sdr.srate in srsRAN config (e.g. "23.04" for 20 MHz BW).
+                type: string
+              txGain:
+                default: 75
+                description: |-
+                  TxGain is the RF transmit gain. Only used when ZMQMode is true.
+                  Matches ru_sdr.tx_gain in srsRAN config.
+                format: int32
+                type: integer
+              ueCount:
+                default: 1
+                description: |-
+                  UECount is the number of simulated UEs to deploy.
+                  When 1: single topology – DU ZMQ connects directly to srsUE.
+                  When >1: multi topology – RadioBreaker ZMQ proxy is deployed.
+                minimum: 1
+                type: integer
+              ueImage:
+                default: docker.io/qawl987/srsran-split:latest
+                description: |-
+                  UEImage is the container image for the srsUE simulator.
+                  Only used when ZMQMode is true.
+                type: string
+              zmqMode:
+                default: true
+                description: |-
+                  ZMQMode enables ZMQ RF simulation (ru_sdr with device_driver=zmq).
+                  Set to false when connecting to real hardware.
+                type: boolean
+            required:
+            - cucpImage
+            - cuupImage
+            - duImage
+            - ueCount
+            - zmqMode
+            type: object
+          status:
+            description: SrsRANConfigStatus is the observed state of SrsRANConfig.
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
