@@ -284,20 +284,28 @@ func (r *RANDeploymentReconciler) GetConfigs(ctx context.Context, nfDeploy *work
 // the condition actually changed, to avoid spurious updates.
 // Also ensures observedGeneration is set correctly for kstatus compatibility.
 func (r *RANDeploymentReconciler) updateStatusIfRequired(ctx context.Context, nfDeploy *workloadv1alpha1.NFDeployment, cur metav1.Condition) error {
-	// Always update observedGeneration to match the spec generation
-	nfDeploy.Status.ObservedGeneration = int32(nfDeploy.Generation)
+	// Check if observedGeneration needs update
+	needsGenerationUpdate := nfDeploy.Status.ObservedGeneration != int32(nfDeploy.Generation)
 
 	for i, old := range nfDeploy.Status.Conditions {
 		if old.Type == cur.Type {
 			if old.Reason == cur.Reason && old.Message == cur.Message && old.Status == cur.Status {
-				// Even if condition hasn't changed, update status to ensure observedGeneration is set
-				return r.Status().Update(ctx, nfDeploy)
+				// Condition hasn't changed, only update if observedGeneration needs updating
+				if needsGenerationUpdate {
+					nfDeploy.Status.ObservedGeneration = int32(nfDeploy.Generation)
+					return r.Status().Update(ctx, nfDeploy)
+				}
+				return nil // No update needed
 			}
+			// Condition changed, update it
 			nfDeploy.Status.Conditions[i] = cur
+			nfDeploy.Status.ObservedGeneration = int32(nfDeploy.Generation)
 			return r.Status().Update(ctx, nfDeploy)
 		}
 	}
+	// New condition, append it
 	nfDeploy.Status.Conditions = append(nfDeploy.Status.Conditions, cur)
+	nfDeploy.Status.ObservedGeneration = int32(nfDeploy.Generation)
 	return r.Status().Update(ctx, nfDeploy)
 }
 
