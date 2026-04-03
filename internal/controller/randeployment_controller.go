@@ -282,11 +282,16 @@ func (r *RANDeploymentReconciler) GetConfigs(ctx context.Context, nfDeploy *work
 
 // updateStatusIfRequired updates NFDeployment.status.conditions only when
 // the condition actually changed, to avoid spurious updates.
+// Also ensures observedGeneration is set correctly for kstatus compatibility.
 func (r *RANDeploymentReconciler) updateStatusIfRequired(ctx context.Context, nfDeploy *workloadv1alpha1.NFDeployment, cur metav1.Condition) error {
+	// Always update observedGeneration to match the spec generation
+	nfDeploy.Status.ObservedGeneration = int32(nfDeploy.Generation)
+
 	for i, old := range nfDeploy.Status.Conditions {
 		if old.Type == cur.Type {
 			if old.Reason == cur.Reason && old.Message == cur.Message && old.Status == cur.Status {
-				return nil // no change
+				// Even if condition hasn't changed, update status to ensure observedGeneration is set
+				return r.Status().Update(ctx, nfDeploy)
 			}
 			nfDeploy.Status.Conditions[i] = cur
 			return r.Status().Update(ctx, nfDeploy)
@@ -386,6 +391,29 @@ func (r *RANDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			logger.Error(err, "Failed to update status after resource reconciliation")
 		}
 
+		// Set Ready condition for ConfigSync compatibility
+		var readyCond metav1.Condition
+		if len(errList) == 0 {
+			readyCond = metav1.Condition{
+				Type:               "Ready",
+				LastTransitionTime: metav1.Time{Time: time.Now()},
+				Status:             metav1.ConditionTrue,
+				Reason:             "Reconciled",
+				Message:            "NFDeployment reconciled successfully",
+			}
+		} else {
+			readyCond = metav1.Condition{
+				Type:               "Ready",
+				LastTransitionTime: metav1.Time{Time: time.Now()},
+				Status:             metav1.ConditionFalse,
+				Reason:             "ReconcileFailed",
+				Message:            "NFDeployment reconciliation failed",
+			}
+		}
+		if err := r.updateStatusIfRequired(ctx, instance, readyCond); err != nil {
+			logger.Error(err, "Failed to update Ready status")
+		}
+
 		// Ensure finalizer is present so cleanup runs on deletion.
 		if !controllerutil.ContainsFinalizer(instance, finalizerName) {
 			controllerutil.AddFinalizer(instance, finalizerName)
@@ -439,7 +467,22 @@ func (r *RANDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 // findNFDeploymentsForConfig returns reconcile requests for all NFDeployments
 // that reference the changed config CR via NFConfig.
 func (r *RANDeploymentReconciler) findNFDeploymentsForConfig(ctx context.Context, obj client.Object) []reconcile.Request {
-	logger := log.FromContext(ctx).WithValues("configKind", obj.GetObjectKind().GroupVersionKind().Kind, "configName", obj.GetName())
+	// Determine the Kind from the concrete type, since obj.GetObjectKind() often
+	// returns empty GVK for objects read from the cache in controller-runtime.
+	var objKind string
+	switch obj.(type) {
+	case *srsranov1alpha1.SrsRANCellConfig:
+		objKind = "SrsRANCellConfig"
+	case *srsranov1alpha1.PLMNConfig:
+		objKind = "PLMNConfig"
+	case *srsranov1alpha1.SrsRANConfig:
+		objKind = "SrsRANConfig"
+	default:
+		objKind = obj.GetObjectKind().GroupVersionKind().Kind
+	}
+
+	logger := log.FromContext(ctx).WithValues("configKind", objKind, "configName", obj.GetName())
+	logger.Info("Config change detected, looking for affected NFDeployments")
 
 	// List all NFDeployments in the same namespace
 	nfDeployList := &workloadv1alpha1.NFDeploymentList{}
@@ -466,7 +509,7 @@ func (r *RANDeploymentReconciler) findNFDeploymentsForConfig(ctx context.Context
 				for _, configRef := range nfConfig.Spec.ConfigRefs {
 					kind, _ := extractKindFromRaw(runtime.RawExtension{Raw: configRef.Raw})
 					name, _ := extractNameFromRaw(runtime.RawExtension{Raw: configRef.Raw})
-					if kind == obj.GetObjectKind().GroupVersionKind().Kind && name == obj.GetName() {
+					if kind == objKind && name == obj.GetName() {
 						logger.Info("Enqueueing NFDeployment for config change", "nfDeployment", nfDeploy.Name)
 						requests = append(requests, reconcile.Request{
 							NamespacedName: types.NamespacedName{
